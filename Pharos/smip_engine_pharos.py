@@ -1,10 +1,10 @@
 """
-SMNNIP Instance Engine -- Pharos
+SMIP Instance Engine -- Pharos
 
 Domain: System health, bus patterns, resource usage, error signatures
 
-Status: STUB -- pending SMNNIPEngine base class implementation
-         (Philadelphos/smnnip_engine.py)
+Status: STUB -- pending SMIPEngine base class implementation
+         (Philadelphos/smip_engine.py)
 
 Wired via ptol_face_wiring on module import.
 """
@@ -20,9 +20,9 @@ _handler = wire_face(FACE_NAME)
 
 def verify(signal):
     """Verify conservation of Pharos domain signal. TODO: implement."""
-    raise NotImplementedError("Pharos SMNNIP verify() not yet implemented.")
+    raise NotImplementedError("Pharos SMIP verify() not yet implemented.")
 
 
 def sign(signal):
     """Sign a verified Pharos signal. TODO: implement."""
-    raise NotImplementedError("Pharos SMNNIP sign() not yet implemented.")
+    raise NotImplementedError("Pharos SMIP sign() not yet implemented.")

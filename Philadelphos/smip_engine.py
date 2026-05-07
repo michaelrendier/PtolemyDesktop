@@ -1,9 +1,9 @@
 """
-Philadelphos/smnnip_engine.py
+Philadelphos/smip_engine.py
 ------------------------------
-SMNNIPEngine -- base class for all Face SMNNIP Instance Engines.
+SMIPEngine -- base class for all Face SMIP Instance Engines.
 
-SMNNIP: Standard Model of Neural Network Information Propagation
+SMIP: Standard Model of Information Propagation
         (Ainulindale Conjecture)
 
 Every Face runs a sovereign instance of this engine trained on its
@@ -30,7 +30,7 @@ The self-adjoint / Hermitian claim:
   TODO (blocks academic submission, not Woz):
     Formal proof that YM update rule guarantees self-adjointness for
     arbitrary layer depth and coupling constant g.
-    Currently verified empirically in smnnip_full_tower.py benchmarks.
+    Currently verified empirically in smip_full_tower.py benchmarks.
     See: Callimachus/v09/core/lsh_datatype.py for the open TODO.
 
 Source: https://github.com/michaelrendier/Ainulindale
@@ -41,9 +41,9 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
-class SMNNIPEngine(ABC):
+class SMIPEngine(ABC):
     """
-    Abstract base for all Face SMNNIP Instance Engines.
+    Abstract base for all Face SMIP Instance Engines.
 
     Subclass and implement verify() and sign() for each Face domain.
     Wire via Pharos.ptol_face_wiring.wire_face() -- do not instantiate directly.
@@ -58,7 +58,7 @@ class SMNNIPEngine(ABC):
     @abstractmethod
     def verify(self, signal: Any) -> bool:
         """
-        Verify that signal conserves information under the SMNNIP Lagrangian.
+        Verify that signal conserves information under the SMIP Lagrangian.
 
         Returns True if conserved, False if violation detected.
         Raise PTL_605 SelfAdjointViolation for hard operator failures.
