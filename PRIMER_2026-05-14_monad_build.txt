@@ -240,6 +240,82 @@ CONJECTURE (direction established, formal derivation pending):
 Do NOT conflate these levels in code comments. Label them.
 
 ========================================================================
+ZERO GENERATION — USE EQUATION, NOT LOOKUP
+========================================================================
+
+Do NOT use the 20-zero hardcoded list from semantic_engine.py for the Monad.
+Generate zeros from the Riemann-Siegel asymptotic formula:
+
+  gamma_n ≈ 2*pi*n / ln(n / (2*pi*e))
+
+Generate N=25000 zeros at Monad init. Cache in memory. No file dependency.
+This covers the full WordNet corpus (~117,000 synsets, ~170,000 word forms)
+at full semantic resolution. 20,000-25,000 is the verified sufficient range.
+N should be configurable at init (default=25000).
+
+The zero basis is CORPUS INVARIANT. The zeros are fixed points of the
+Riemann zeta function. They exist independently of any language or corpus.
+Any corpus ingested projects onto the same pre-existing basis.
+The zeros do not get assigned by the first corpus ingested.
+
+========================================================================
+THE HYPERINDEX AS MEANING-ASSIGNMENT MECHANISM
+========================================================================
+
+Key insight from this session:
+
+The HyperWebster in reverse — the HyperIndex — gives the semantic
+neighborhood. Without it, the zero space is a complete enumeration of
+all possible addresses, semantically empty.
+
+"Without the author to give meaning to the words, the hyperwebster
+is a graveyard of permutations." — Gemini (first HyperIndex exploration)
+
+The HyperIndex is what makes an excitation in the zero space mean
+something specific. This is structurally analogous to the Higgs field
+giving meaning (mass) to excitations that would otherwise be
+undifferentiated. The VEV in the SMMNIP Lagrangian is the neural
+Higgs analog. The HyperIndex instantiates that VEV for each surface form.
+
+For code purposes: the HyperIndex mechanism in semantic_engine.py
+(_hyperindex, _str_to_int) is correct as-is. Do not modify it.
+The cardioid attractor behavior of Horner's method over the Unicode
+space is what gives the semantic clustering its structure.
+
+========================================================================
+CORPUS BIAS NOTE
+========================================================================
+
+If two language corpora (e.g. English and French) are ingested into
+separate empty Monad instances, they will land in adjacent but not
+identical regions of the zero space. This is expected and correct.
+
+Two causes:
+1. Character frequency differences between languages create different
+   HyperIndex distributions (surface artifact — minor)
+2. Languages genuinely carve up semantic space differently — different
+   concepts, different boundaries (real semantic structure — dominant)
+
+Cross-language same-concept words (water/eau/aqua) map to the same zero.
+Verified in semantic_engine.py cross_language_demo(). The basis is
+corpus-invariant. The projection is language-specific.
+
+========================================================================
+BUILD TEST STANDARD
+========================================================================
+
+The test is empirical. If the code works, the goal is satisfied.
+
+Minimum verification:
+  1. learn("The dog chased the cat around the yard.")
+  2. respond("what chased") → should surface words related to dog/chase
+  3. learn() called twice on same text → DC deepens, no duplicate entries
+  4. dc_sum reported after each learn() call
+  5. Zero basis generates correctly to N=25000 via formula
+
+That's the bar. Working output. Not academic validation.
+
+========================================================================
 WHAT TO PUSH
 ========================================================================
 
