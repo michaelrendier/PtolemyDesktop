@@ -1,0 +1,8 @@
+{
+  "index": 18,
+  "timestamp": "2026-05-06T23:27:43Z",
+  "data": "{\"script\": \"example_acquire_probe.py\", \"args\": [], \"enqueued_at\": 1778110059.4372444, \"status\": \"done\", \"result\": \"{\\\"channel\\\": \\\"acquire\\\", \\\"type\\\": \\\"forge_run_start\\\", \\\"payload\\\": {\\\"words\\\": [\\\"hiraeth\\\", \\\"petrichor\\\", \\\"the\\\", \\\"river\\\", \\\"synchronicity\\\"], \\\"n\\\": 5, \\\"mode\\\": \\\"diagnostic probe\\\"}}\\n{\\\"channel\\\": \\\"acquire\\\", \\\"type\\\": \\\"word_start\\\", \\\"payload\\\": {\\\"word\\\": \\\"hiraeth\\\"}}\\n{\\\"channel\\\": \\\"acquire\\\", \\\"type\\\": \\\"api_call\\\", \\\"payload\\\": {\\\"word\\\": \\\"hiraeth\\\", \\\"source\\\": \\\"free_dict\\\"}}\\n{\\\"channel\\\": \\\"acquire\\\", \\\"type\\\": \\\"api_miss\\\", \\\"payload\\\": {\\\"word\\\": \\\"hiraeth\\\", \\\"source\\\": \\\"free_dict\\\"}}\\n{\\\"channel\\\": \\\"acquire\\\", \\\"type\\\": \\\"api_call\\\", \\\"payload\\\": {\\\"word\"}",
+  "prev_hash": "0000050348b378c62b8319079362a694c4467f7ccf2e917a7f491fc5b15b3422",
+  "nonce": 409587,
+  "hash": "00000772e42a5080461705a7aa4eb260df748f3f02b0b6769b5e5cae36290c1d"
+}

@@ -82,6 +82,7 @@ CH_BLOCKCHAIN = "BLOCKCHAIN"
 CH_SETTINGS   = "SETTINGS"
 CH_CONTEXT    = "CONTEXT"        # CyclicContextBuffer broadcasts (shared)
 CH_DMESG      = "DMESG"          # Bus-internal events reflected to dmesg
+CH_LEARN      = "LEARN"          # Passive text learning — any face publishes text here
 
 
 # ── Priority ──────────────────────────────────────────────────────────────────

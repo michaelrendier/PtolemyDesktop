@@ -1,0 +1,431 @@
+; jk.ufc
+;
+; KARLSSON CHESS SPIRAL SEQUENCES
+;
+; For each pixel, maps the complex coordinate to a position on the Ulam
+; spiral (integer-numbered square chessboard, spiraling outward from centre)
+; and computes the attack structure of a chosen leaper piece at that position.
+;
+; Coloring encodes two quantities blended by the Density Blend parameter:
+;
+;   Color Class  — which independent-set the position belongs to.
+;                  Approximated by (spiral_index mod period) / period.
+;                  Discrete, band-like. At 100 positions: coarse regions.
+;                  At 3,200,000 positions: stable color domains emerge.
+;
+;   Interference Density — cosine interference of the 8 attacked positions.
+;                  Constructive (→ 1): deep inside a color domain.
+;                  Destructive (→ 0): on the boundary between domains.
+;                  This is the Newton-basin escape-velocity analog:
+;                  smooth within regions, fractal at boundaries.
+;
+; Piece types (leapers — the attack set is finite, no sliding rays):
+;   Knight   (1,2) — OEIS A274924 and related sequences
+;   Camel    (1,3) — longer L-shape
+;   Giraffe  (1,4) — even longer
+;   Zebra    (2,3) — diagonal leaper
+;
+; At Density Blend = 0.5 the image resembles Newton fractal basins:
+; colored regions separated by fractal-geometry boundaries whose
+; complexity increases with spiral depth (zoom out = more positions).
+;
+; Spiral convention: Ulam square spiral, centre = n=1, first move RIGHT.
+;   Ring k covers (2k-1)^2+1 to (2k+1)^2 (8k positions).
+;   Right side:  x=+k, y from -(k-1) to +k  (excludes bottom-right corner)
+;   Top side:    y=+k, x from +(k-1) to -k
+;   Left side:   x=-k, y from +(k-1) to -k  (includes bottom-left corner)
+;   Bottom side: y=-k, x from -(k-1) to +k  (includes bottom-right corner)
+;
+; Spiral index formula verified against positions n=1..25.
+;
+; Mathematical originator:  Jonas Karlsson
+; UF / DerivationEngine implementation: O Captain My Captain + Claude (Anthropic)
+; Date:      2026-05-14
+; Signature: CLAUDE-SMMNIP-00729-56714-24600
+;
+; Compatible with: UltraFractal 5+, Ptolemy DerivationEngine Viewer
+
+jk-ChessSpiral {
+
+param piece
+  caption = "Piece Type"
+  default = 0
+  enum = "Knight (1,2)" "Camel (1,3)" "Giraffe (1,4)" "Zebra (2,3)"
+  hint = "Leaper type. Each generates a distinct Karlsson independent-set sequence."
+endparam
+
+param cellsize
+  caption = "Cell Size"
+  default = 1.0
+  min = 0.001
+  hint = "Side length of one board square in the complex plane. \
+          Decrease to zoom in. At cellsize=1 each unit = one square."
+endparam
+
+param period
+  caption = "Color Period"
+  default = 8
+  min = 1
+  max = 64
+  hint = "Modulus for color-class assignment (spiral_index mod period). \
+          Knight: try 4.  Camel: try 6.  Giraffe/Zebra: try 8. \
+          Higher values reveal finer independent-set structure."
+endparam
+
+param blend
+  caption = "Density Blend"
+  default = 0.5
+  min = 0.0
+  max = 1.0
+  hint = "0 = pure color class (discrete bands, hard boundaries). \
+          1 = pure interference density (smooth cosine waves). \
+          0.5 = Newton-basin look: colored regions with fractal boundaries."
+endparam
+
+param phaseoffset
+  caption = "Phase Offset"
+  default = 0.0
+  hint = "Fractional shift of the color-class assignment (0..1). \
+          Rotates which independent set each color represents."
+endparam
+
+; ── Variable declarations ────────────────────────────────────────────────────
+
+init:
+  float gx = 0.0
+  float gy = 0.0
+  float ring = 0.0
+  float n0 = 0.0
+  float sn = 0.0
+  float m0x = 0.0
+  float m0y = 0.0
+  float m1x = 0.0
+  float m1y = 0.0
+  float m2x = 0.0
+  float m2y = 0.0
+  float m3x = 0.0
+  float m3y = 0.0
+  float m4x = 0.0
+  float m4y = 0.0
+  float m5x = 0.0
+  float m5y = 0.0
+  float m6x = 0.0
+  float m6y = 0.0
+  float m7x = 0.0
+  float m7y = 0.0
+  float a0 = 0.0
+  float a1 = 0.0
+  float a2 = 0.0
+  float a3 = 0.0
+  float a4 = 0.0
+  float a5 = 0.0
+  float a6 = 0.0
+  float a7 = 0.0
+  float tx = 0.0
+  float ty = 0.0
+  float tr = 0.0
+  float density = 0.0
+  float ccmod = 0.0
+  float P = 0.0
+  float colorval = 0.0
+
+loop:
+  #z = #z
+
+; ── Main coloring computation ────────────────────────────────────────────────
+
+final:
+
+  ; ── Step 1: pixel → integer board coordinate ──────────────────────────────
+  gx = round(real(#pixel) / @cellsize)
+  gy = round(imag(#pixel) / @cellsize)
+
+  ; ── Step 2: (gx, gy) → Ulam spiral index sn ──────────────────────────────
+  ;
+  ; Ring k: first index n0 = (2k-1)^2 + 1.
+  ; Side offsets: right +0, top +2k, left +4k, bottom +6k.
+  ;
+  ; Corner assignment (each corner belongs to exactly one side):
+  ;   Top-right    (+k,+k): RIGHT side  (last position of right)
+  ;   Top-left     (-k,+k): TOP side    (last position of top)
+  ;   Bottom-left  (-k,-k): LEFT side   (last position of left)
+  ;   Bottom-right (+k,-k): BOTTOM side (last position of bottom)
+  ;
+  ; The condition "gx == ring AND gy > -ring" (not >=) correctly excludes
+  ; the bottom-right corner from the right side, routing it to bottom.
+
+  ring = max(abs(gx), abs(gy))
+
+  if ring == 0
+    sn = 1.0
+  elseif gx == ring && gy > -ring
+    ; Right side: x = +ring, y from -(ring-1) to +ring
+    n0 = (2.0*ring - 1.0) * (2.0*ring - 1.0) + 1.0
+    sn = n0 + gy + ring - 1.0
+  elseif gy == ring
+    ; Top side: y = +ring, x from +(ring-1) to -ring
+    n0 = (2.0*ring - 1.0) * (2.0*ring - 1.0) + 1.0 + 2.0*ring
+    sn = n0 + ring - 1.0 - gx
+  elseif gx == -ring
+    ; Left side: x = -ring, y from +(ring-1) to -ring  (includes bottom-left corner)
+    n0 = (2.0*ring - 1.0) * (2.0*ring - 1.0) + 1.0 + 4.0*ring
+    sn = n0 + ring - 1.0 - gy
+  else
+    ; Bottom side: y = -ring, x from -(ring-1) to +ring  (includes bottom-right corner)
+    n0 = (2.0*ring - 1.0) * (2.0*ring - 1.0) + 1.0 + 6.0*ring
+    sn = n0 + gx + ring - 1.0
+  endif
+
+  ; ── Step 3: piece move table ───────────────────────────────────────────────
+  if @piece == 0
+    ; Knight (1,2): 8 L-shaped jumps
+    m0x =  1.0
+    m0y =  2.0
+    m1x =  2.0
+    m1y =  1.0
+    m2x =  2.0
+    m2y = -1.0
+    m3x =  1.0
+    m3y = -2.0
+    m4x = -1.0
+    m4y = -2.0
+    m5x = -2.0
+    m5y = -1.0
+    m6x = -2.0
+    m6y =  1.0
+    m7x = -1.0
+    m7y =  2.0
+  elseif @piece == 1
+    ; Camel (1,3): 8 extended L-shapes
+    m0x =  1.0
+    m0y =  3.0
+    m1x =  3.0
+    m1y =  1.0
+    m2x =  3.0
+    m2y = -1.0
+    m3x =  1.0
+    m3y = -3.0
+    m4x = -1.0
+    m4y = -3.0
+    m5x = -3.0
+    m5y = -1.0
+    m6x = -3.0
+    m6y =  1.0
+    m7x = -1.0
+    m7y =  3.0
+  elseif @piece == 2
+    ; Giraffe (1,4)
+    m0x =  1.0
+    m0y =  4.0
+    m1x =  4.0
+    m1y =  1.0
+    m2x =  4.0
+    m2y = -1.0
+    m3x =  1.0
+    m3y = -4.0
+    m4x = -1.0
+    m4y = -4.0
+    m5x = -4.0
+    m5y = -1.0
+    m6x = -4.0
+    m6y =  1.0
+    m7x = -1.0
+    m7y =  4.0
+  else
+    ; Zebra (2,3)
+    m0x =  2.0
+    m0y =  3.0
+    m1x =  3.0
+    m1y =  2.0
+    m2x =  3.0
+    m2y = -2.0
+    m3x =  2.0
+    m3y = -3.0
+    m4x = -2.0
+    m4y = -3.0
+    m5x = -3.0
+    m5y = -2.0
+    m6x = -3.0
+    m6y =  2.0
+    m7x = -2.0
+    m7y =  3.0
+  endif
+
+  ; ── Step 4: spiral index for each attacked square ─────────────────────────
+  ;
+  ; The same spiral-index formula is applied 8 times, once per move vector.
+  ; (UF has no subroutines in this version — macro expansion.)
+
+  ; Move 0
+  tx = gx + m0x
+  ty = gy + m0y
+  tr = max(abs(tx), abs(ty))
+  if tr == 0
+    a0 = 1.0
+  elseif tx == tr && ty > -tr
+    a0 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0 + ty+tr-1.0
+  elseif ty == tr
+    a0 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+2.0*tr + tr-1.0-tx
+  elseif tx == -tr
+    a0 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+4.0*tr + tr-1.0-ty
+  else
+    a0 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+6.0*tr + tx+tr-1.0
+  endif
+
+  ; Move 1
+  tx = gx + m1x
+  ty = gy + m1y
+  tr = max(abs(tx), abs(ty))
+  if tr == 0
+    a1 = 1.0
+  elseif tx == tr && ty > -tr
+    a1 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0 + ty+tr-1.0
+  elseif ty == tr
+    a1 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+2.0*tr + tr-1.0-tx
+  elseif tx == -tr
+    a1 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+4.0*tr + tr-1.0-ty
+  else
+    a1 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+6.0*tr + tx+tr-1.0
+  endif
+
+  ; Move 2
+  tx = gx + m2x
+  ty = gy + m2y
+  tr = max(abs(tx), abs(ty))
+  if tr == 0
+    a2 = 1.0
+  elseif tx == tr && ty > -tr
+    a2 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0 + ty+tr-1.0
+  elseif ty == tr
+    a2 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+2.0*tr + tr-1.0-tx
+  elseif tx == -tr
+    a2 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+4.0*tr + tr-1.0-ty
+  else
+    a2 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+6.0*tr + tx+tr-1.0
+  endif
+
+  ; Move 3
+  tx = gx + m3x
+  ty = gy + m3y
+  tr = max(abs(tx), abs(ty))
+  if tr == 0
+    a3 = 1.0
+  elseif tx == tr && ty > -tr
+    a3 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0 + ty+tr-1.0
+  elseif ty == tr
+    a3 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+2.0*tr + tr-1.0-tx
+  elseif tx == -tr
+    a3 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+4.0*tr + tr-1.0-ty
+  else
+    a3 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+6.0*tr + tx+tr-1.0
+  endif
+
+  ; Move 4
+  tx = gx + m4x
+  ty = gy + m4y
+  tr = max(abs(tx), abs(ty))
+  if tr == 0
+    a4 = 1.0
+  elseif tx == tr && ty > -tr
+    a4 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0 + ty+tr-1.0
+  elseif ty == tr
+    a4 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+2.0*tr + tr-1.0-tx
+  elseif tx == -tr
+    a4 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+4.0*tr + tr-1.0-ty
+  else
+    a4 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+6.0*tr + tx+tr-1.0
+  endif
+
+  ; Move 5
+  tx = gx + m5x
+  ty = gy + m5y
+  tr = max(abs(tx), abs(ty))
+  if tr == 0
+    a5 = 1.0
+  elseif tx == tr && ty > -tr
+    a5 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0 + ty+tr-1.0
+  elseif ty == tr
+    a5 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+2.0*tr + tr-1.0-tx
+  elseif tx == -tr
+    a5 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+4.0*tr + tr-1.0-ty
+  else
+    a5 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+6.0*tr + tx+tr-1.0
+  endif
+
+  ; Move 6
+  tx = gx + m6x
+  ty = gy + m6y
+  tr = max(abs(tx), abs(ty))
+  if tr == 0
+    a6 = 1.0
+  elseif tx == tr && ty > -tr
+    a6 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0 + ty+tr-1.0
+  elseif ty == tr
+    a6 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+2.0*tr + tr-1.0-tx
+  elseif tx == -tr
+    a6 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+4.0*tr + tr-1.0-ty
+  else
+    a6 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+6.0*tr + tx+tr-1.0
+  endif
+
+  ; Move 7
+  tx = gx + m7x
+  ty = gy + m7y
+  tr = max(abs(tx), abs(ty))
+  if tr == 0
+    a7 = 1.0
+  elseif tx == tr && ty > -tr
+    a7 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0 + ty+tr-1.0
+  elseif ty == tr
+    a7 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+2.0*tr + tr-1.0-tx
+  elseif tx == -tr
+    a7 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+4.0*tr + tr-1.0-ty
+  else
+    a7 = (2.0*tr-1.0)*(2.0*tr-1.0)+1.0+6.0*tr + tx+tr-1.0
+  endif
+
+  ; ── Step 5: color class and interference density ──────────────────────────
+
+  P = @period * 1.0
+
+  ; Color class: which independent set does sn belong to?
+  ; phaseoffset shifts the assignment to reveal different sets.
+  ccmod = sn + @phaseoffset * P
+  ccmod = ccmod - floor(ccmod / P) * P
+
+  ; Interference density: cosine sum over spiral indices of all 8 attacked squares.
+  ; This creates constructive/destructive interference between the attack structure
+  ; and the spiral's arithmetic — producing the wave-like domain boundaries.
+  ;
+  ; Constructive (density → 1): attacked squares all share the same residue class.
+  ;   = deep inside a color domain (stable Karlsson placement).
+  ; Destructive (density → 0): attacked squares span multiple residue classes.
+  ;   = on a domain boundary (the "fractal edge" of the Karlsson pattern).
+  ;   This is structurally identical to Newton-basin boundary escape velocity.
+
+  density = (   cos(2.0*#pi*a0/P)
+              + cos(2.0*#pi*a1/P)
+              + cos(2.0*#pi*a2/P)
+              + cos(2.0*#pi*a3/P)
+              + cos(2.0*#pi*a4/P)
+              + cos(2.0*#pi*a5/P)
+              + cos(2.0*#pi*a6/P)
+              + cos(2.0*#pi*a7/P) ) / 8.0
+
+  ; Map density from [-1, 1] to [0, 1]
+  density = (density + 1.0) * 0.5
+
+  ; Blend the two signals.
+  ; At blend=0.5: color class gives the basin, density gives the boundary shading.
+  colorval = (1.0 - @blend) * (ccmod / P) + @blend * density
+
+  ; Wrap to [0, 1] so gradient cycles cleanly
+  colorval = colorval - floor(colorval)
+
+  #color = gradient(colorval)
+
+default:
+  title   = "Karlsson Chess Spiral"
+  maxiter = 1
+
+}

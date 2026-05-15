@@ -16,7 +16,7 @@ User(PharosLayout):
 from PyQt6.QtCore    import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from Pharos.PharosGeometry import PharosLayout, UserDisplay
+from Pharos.PharosGeometry import PharosLayout
 
 import sys
 
@@ -92,7 +92,7 @@ class User(PharosLayout):
             btn = getattr(self, name + 'Btn', None)
             if btn:
                 btn.hide()
-        self.UserDisplay.set_mini(True)
+        self._overlay.set_mini(True)
 
     def restore(self):
         self._mini = False
@@ -101,7 +101,7 @@ class User(PharosLayout):
             btn = getattr(self, name + 'Btn', None)
             if btn:
                 btn.show()
-        self.UserDisplay.set_mini(False)
+        self._overlay.set_mini(False)
 
     # ── system ─────────────────────────────────────────────────────────────────
 
@@ -119,57 +119,57 @@ class User(PharosLayout):
 
     def archimedesMenu(self, event):
         self._chain_commit('Archimedes', 'menu_open')
-        self.UserDisplay.changeIdentity('Archimedes')
+        self._overlay.changeIdentity('Archimedes')
         self.clearLayout()
         self.layout.addWidget(self.graphBtn,   11, 2, 1, 1)
         self.layout.addWidget(self.fractalBtn, 11, 3, 1, 1)
 
     def alexandriaMenu(self, event):
         self._chain_commit('Alexandria', 'menu_open')
-        self.UserDisplay.changeIdentity('Alexandria')
+        self._overlay.changeIdentity('Alexandria')
         self.clearLayout()
         self.layout.addWidget(self.coreBtn,  11, 2, 1, 1)
         self.layout.addWidget(self.earthBtn, 11, 3, 1, 1)
 
     def anaximanderMenu(self, event):
         self._chain_commit('Anaximander', 'menu_open')
-        self.UserDisplay.changeIdentity('Anaximander')
+        self._overlay.changeIdentity('Anaximander')
         self.clearLayout()
         self.layout.addWidget(self.navigationBtn, 11, 2, 1, 1)
 
     def callimachusMenu(self, event):
         self._chain_commit('Callimachus', 'menu_open')
-        self.UserDisplay.changeIdentity('Callimachus')
+        self._overlay.changeIdentity('Callimachus')
         self.clearLayout()
         self.layout.addWidget(self.dbCPanelBtn, 11, 2, 1, 1)
 
     def kryptosMenu(self, event):
         self._chain_commit('Kryptos', 'menu_open')
-        self.UserDisplay.changeIdentity('Kryptos')
+        self._overlay.changeIdentity('Kryptos')
         self.clearLayout()
 
     def mouseionMenu(self, event):
         self._chain_commit('Mouseion', 'menu_open')
-        self.UserDisplay.changeIdentity('Mouseion')
+        self._overlay.changeIdentity('Mouseion')
         self.clearLayout()
         self.layout.addWidget(self.libraryBtn,   11, 2, 1, 1)
         self.layout.addWidget(self.wikiGroupBtn, 11, 3, 1, 1)
 
     def phaleronMenu(self, event):
         self._chain_commit('Phaleron', 'menu_open')
-        self.UserDisplay.changeIdentity('Phaleron')
+        self._overlay.changeIdentity('Phaleron')
         self.clearLayout()
         self.layout.addWidget(self.treasureHuntBtn, 11, 2, 1, 1)
 
     def pharosMenu(self, event):
         self._chain_commit('Pharos', 'menu_open')
-        self.UserDisplay.changeIdentity('Pharos')
+        self._overlay.changeIdentity('Pharos')
         self.clearLayout()
         self.originalLayout()
 
     def teslaMenu(self, event):
         self._chain_commit('Tesla', 'menu_open')
-        self.UserDisplay.changeIdentity('Tesla')
+        self._overlay.changeIdentity('Tesla')
         self.clearLayout()
 
 

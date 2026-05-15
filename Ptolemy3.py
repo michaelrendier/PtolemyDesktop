@@ -64,6 +64,18 @@ except Exception as _e:
     PtolShell = None
     print(f'[Pharos] PtolShell: {_e}')
 
+try:
+    from Pharos.PGui           import PWindow
+except Exception as _e:
+    PWindow = None
+    print(f'[Pharos] PGui/PWindow: {_e}')
+
+try:
+    from Philadelphos.monad    import Monad as _Monad
+except Exception as _e:
+    _Monad = None
+    print(f'[Philadelphos] Monad: {_e}')
+
 # DEFERRED — may fail, reported to shell, never kills desktop
 try:
     from Callimachus.v09 import Callimachus as _CallimachusV09
@@ -114,6 +126,65 @@ except Exception as _e:
     KVMClient = None
     print(f'[Tesla] KVM: {_e}')
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MonadLearner — serialised background β-field writer
+# ══════════════════════════════════════════════════════════════════════════════
+
+import queue as _queue
+import threading as _threading
+
+class _MonadLearner(_threading.Thread):
+    """
+    Single persistent daemon thread. Serialises all monad.learn() calls so
+    the β field never sees concurrent writes from the Qt UI thread and the
+    CH_LEARN subscriber simultaneously.
+
+    β saturation cache: zeros whose |β| > _BETA_SAT skip β deepening on
+    subsequent learn() calls — avoids redundant computation while still
+    updating A-connections.  O(1) set lookup.
+
+    Usage:
+        learner = _MonadLearner(monad)
+        learner.start()
+        learner.enqueue("some text")
+        learner.shutdown()   # sends None sentinel
+    """
+    _BETA_SAT = 7.552   # abs(L_GROUND)*4 ≈ 1.888*4
+
+    def __init__(self, monad):
+        """
+        :param monad: The shared :class:`Philadelphos.monad.Monad` instance.
+        """
+        super().__init__(daemon=True, name='MonadLearner')
+        self._monad      = monad
+        self._queue      = _queue.Queue()
+        self._saturated  = set()
+
+    def enqueue(self, text: str):
+        """Queue *text* for background learning; ignores blank strings.
+
+        :param text: Raw text to pass to :meth:`Monad.learn`.
+        :type text: str
+        """
+        if text and text.strip():
+            self._queue.put(text)
+
+    def shutdown(self):
+        """Signal the thread to exit cleanly by enqueuing the ``None`` sentinel."""
+        self._queue.put(None)
+
+    def run(self):
+        """Drain the queue, calling ``monad.learn(text)`` for each item."""
+        while True:
+            text = self._queue.get()
+            if text is None:
+                break
+            try:
+                self._monad.learn(text)
+            except Exception:
+                pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -489,39 +560,82 @@ class Ptolemy(QMainWindow):
 
         if User:
             self.Interface = User(self)
-            self.Interface.setParent(None)  # detach from QMainWindow so addWidget can embed it
-            self._pharos_proxy = self.scene.addWidget(self.Interface)
-            # Group holds proxy + UserDisplay so the whole Interface moves as one.
-            # No flags — movement via itemAt() in mousePressEvent.
-            self._interface_group = QGraphicsItemGroup()
-            self._interface_group.setZValue(1)
-            self.scene.addItem(self._interface_group)
-            self._pharos_proxy.setParentItem(self._interface_group)
-            self._pharos_proxy.setPos(0, 0)          # local origin inside group
-            self.Interface.UserDisplay.setParentItem(self._interface_group)
-            self._interface_group.setPos(self.Interface.x, self.Interface.y)
+            self.Interface.setParent(None)  # detach from QMainWindow so PWindow can embed it
+            if PWindow:
+                self._pharos_win = PWindow(
+                    self.scene, self.Interface,
+                    title='', thread=None, timers=[],
+                    x=self.Interface.x, y=self.Interface.y,
+                    w=self.Interface.w, h=self.Interface.h,
+                    undecorated=True,
+                )
+                self._pharos_proxy = self._pharos_win._proxy
+            else:
+                self._pharos_proxy = self.scene.addWidget(self.Interface)
+                self._pharos_proxy.setPos(self.Interface.x, self.Interface.y)
+                self._pharos_win = None
+            self._interface_group = None
+            # Spectro and indicator as PWindow children — move automatically on drag
+            if hasattr(self.Interface, '_sp_proxy') and self.Interface._sp_proxy is not None:
+                self.Interface._sp_proxy.setParentItem(self._pharos_win)
+                self.Interface._sp_proxy.setPos(self.Interface.w + 10,
+                                                 self.Interface.h - 85)
+                self.Interface._sp_proxy.setZValue(0)
+            if hasattr(self.Interface, '_ind_proxy') and self.Interface._ind_proxy is not None:
+                self.Interface._ind_proxy.setParentItem(self._pharos_win)
+                self.Interface._ind_proxy.setPos(10, 35)
         else:
             self.Interface = None
             self._pharos_proxy = None
+            self._pharos_win   = None
             self._interface_group = None
             print('[Pharos] Interface (OpenGL) disabled — skipped')
 
+        # ── Monad singleton — shared by shell pty and CH_LEARN subscriber ────────
+        self.monad = None
+        self.monad_learner = None
+        if _Monad is not None:
+            try:
+                self.monad = _Monad(N=25000)
+                _ck = os.path.join(os.path.dirname(__file__),
+                                   'Callimachus', 'data', 'monad_wordnet.json')
+                if os.path.exists(_ck):
+                    self.monad.load(_ck)
+                    print('[Monad] loaded from checkpoint')
+                self.monad_learner = _MonadLearner(self.monad)
+                self.monad_learner.start()
+                # subscribe to CH_LEARN for passive text ingestion
+                from Pharos.PtolBus import CH_LEARN
+                self.msg_bus.subscribe(
+                    CH_LEARN,
+                    lambda msg: self.monad_learner.enqueue(
+                        msg.payload if isinstance(msg.payload, str)
+                        else str(msg.payload)))
+                print('[Monad] learner thread started, CH_LEARN subscribed')
+            except Exception as _e:
+                print(f'[Monad] init error: {_e}')
+
+        # ── PtolShell — permanent PGui window, 80×25 terminal ─────────────────
+        _SW, _SH = 660, 415
         try:
-            if PtolShell:
-                self.PtolShell = PtolShell(parent=None)
-                self.PtolShell.Ptolemy = self
-                self._shell_proxy = self.scene.addWidget(self.PtolShell)
-                self._shell_proxy.setPos(0, 0)
-                self._shell_proxy.setZValue(0)
-                self._shell_proxy.hide()             # toggle via Ctrl+`
-                self.PtolShell.resize(self.screen.width(), self.screen.height())
+            if PtolShell and PWindow:
+                self._ptol_shell = PtolShell(parent=None)
+                self._ptol_shell.Ptolemy = self
+                self._ptol_shell.resize(_SW, _SH)
+                self._shell_win = PWindow(
+                    self.scene, self._ptol_shell,
+                    title='Ptolemy',
+                    thread=None, timers=[],
+                    x=60, y=60, w=_SW, h=_SH)
             else:
-                self.PtolShell = None
+                self._ptol_shell = None
+                self._shell_win  = None
         except Exception as _e:
-            self.PtolShell = None
+            self._ptol_shell = None
+            self._shell_win  = None
             print(f'[PtolShell] init failed: {_e}')
 
-        self._launch_philadelphos()   # after PtolShell — needs self.PtolShell set
+        self._launch_philadelphos()   # after shell block — checks self._ptol_shell
 
         # ── LeftPanel (fixed sidebar, 30 s autohide) ──────────────────────────
         self._panel_proxy     = None
@@ -551,18 +665,15 @@ class Ptolemy(QMainWindow):
             self.LeftPanel = None
             print(f'[LeftPanel] {_lp_e}')
 
-        # wire drag overlays after first event loop (widgets sized by then)
-        self._iface_drag = None
-        self._menu_drag  = None
+        # wire menu drag overlay after first event loop (widget sized by then)
+        self._menu_drag = None
         QTimer.singleShot(0, self._wire_drag_overlays)
 
     def raise_ptolemy(self):
         self.raise_()
         self.activateWindow()
-        if self._interface_group and self.Interface:
-            self._interface_group.setPos(self.Interface.x, self.Interface.y)
-            if self._iface_drag:
-                self._iface_drag.setPos(self.Interface.x, self.Interface.y)
+        if self._pharos_win is not None and self.Interface:
+            self._pharos_win.setPos(self.Interface.x, self.Interface.y)
 
     def _show_left_panel(self):
         if self._panel_proxy:
@@ -575,16 +686,7 @@ class Ptolemy(QMainWindow):
             self._panel_proxy.hide()
 
     def _wire_drag_overlays(self):
-        """Add transparent drag-grab strips over moveable scene items."""
-        if self._interface_group and self.Interface:
-            br = self._interface_group.childrenBoundingRect()
-            gp = self._interface_group.pos()
-            w  = br.width() if br.width() > 1 else self.Interface.width()
-            if w > 0:
-                self._iface_drag = _DragOverlay(self._interface_group, w, 24)
-                self._iface_drag.setPos(gp)
-                self.scene.addItem(self._iface_drag)
-
+        """Add transparent drag-grab strip over the menu (Interface uses PWindow drag)."""
         if self._menu_proxy and self.Menu:
             mp = self._menu_proxy
             w  = self.Menu.width()  or 200
@@ -603,7 +705,7 @@ class Ptolemy(QMainWindow):
         try:
             from Philadelphos.Phila import Phila
             self.Philadelphos = Phila(None)
-            if not self.PtolShell:
+            if not self._ptol_shell:
                 self.scene.addWidget(self.Philadelphos)
         except ImportError:
             self.Philadelphos = None
@@ -822,13 +924,11 @@ class Ptolemy(QMainWindow):
                 fn()
 
     def openShell(self, event=None):
-        """Toggle PtolShell visibility."""
-        if self.PtolShell:
-            if self.PtolShell.isVisible():
-                self.PtolShell.hide()
-            else:
-                self.PtolShell.show()
-                self.PtolShell.setFocus()
+        """Raise the Ptolemy shell window (always present, never hidden)."""
+        if self._shell_win is not None:
+            self._shell_win.show()
+            if self._ptol_shell is not None:
+                self._ptol_shell.setFocus()
 
     def openFace(self, face_id: str):
         """Dispatcher: open a Face by id string (used by DualTrayMenu, graph nodes)."""

@@ -1,0 +1,8 @@
+{
+  "index": 8,
+  "timestamp": "2026-05-06T12:52:31Z",
+  "data": "{\"event\": \"enqueue\", \"script\": \"example_acquire_probe.py\"}",
+  "prev_hash": "00000e241c5b3f3bd9538d5e4df51e137379c91827447b401b7e3fdcd95b0780",
+  "nonce": 57824,
+  "hash": "00000c389eb82400326c03e37eee438632f47a6d4aa401cf5779d6e0af7ca6bd"
+}

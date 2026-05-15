@@ -1,0 +1,257 @@
+PTOLEMY3 REFACTOR MAP  v0.9
+===========================
+Format: SYSTEM → ORIGINAL / NEW / ARCHIVED / STATUS / NOTES
+Generated: 2026-05-06  Plan 1
+
+This file is a reference map, not a chronological log.
+If a refactoring breaks something, use the ORIGINAL path as rollback reference.
+Files in UnrefinedArchive are read-only reference copies — do not modify them.
+
+══════════════════════════════════════════════════════════════════════════════
+SYSTEM: KERNEL (Ptolemy3.py)
+══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL : Ptolemy3/Ptolemy3.py  (793 lines, pre-v0.9)
+NEW      : Ptolemy3/Ptolemy3.py  (patched in-place, v0.9)
+ARCHIVED : Ptolemy3/UnrefinedArchive/kernel/Ptolemy3_original.py
+STATUS   : PATCHED
+
+CHANGES (v0.9):
+  - Line 463: self.Philadelphos = None  pre-set before _init_ui()
+    (was: AttributeError at Menu init because Philadelphos not yet launched)
+  - Added Ptolemy.log(msg, color=None) — thin wrapper on msg_bus.post(CH_LOG)
+    Replaces all setOutput calls in dependent widgets.
+  - FaceRegistry (embedded class, was named PtolBus → collision with real bus)
+    Renamed to FaceRegistry inside Ptolemy3.py; self.bus = FaceRegistry(self)
+    Extracted to: Pharos/PtolRegistry.py
+  - Import alias: from Pharos.PtolBus import PtolBus as _PharosPtolBus
+    (already in place at line 55 — prevents name collision)
+
+NOTES:
+  - Embedded PtolBus (FaceRegistry) was lines 119-293 of original
+  - Real message bus is Pharos/PtolBus.py (_PharosPtolBus alias)
+  - self.bus = face registry (launch/suspend/terminate)
+  - self.msg_bus = message bus (pub/sub, channels, priority queue)
+
+══════════════════════════════════════════════════════════════════════════════
+SYSTEM: MENU (Pharos/Menu.py)
+══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL : Ptolemy3/Pharos/Menu.py  (597 lines, pre-v0.9)
+NEW      : Ptolemy3/Pharos/Menu.py  (patched in-place, v0.9)
+ARCHIVED : Ptolemy3/UnrefinedArchive/pharos_menu/Menu_original.py
+STATUS   : PATCHED
+
+CHANGES (v0.9):
+  - Lines 24-25: safe guard on Philadelphos.setOutput
+    Old: self.output = self.Ptolemy.Philadelphos.setOutput
+    New: _phila = getattr(self.Ptolemy, 'Philadelphos', None)
+         self.output = _phila.setOutput if _phila and hasattr(_phila, 'setOutput') else lambda *a, **kw: None
+  - Remaining self.output() calls are safe (no-op lambda if Phila absent)
+
+NOTES:
+  - exec() calls in repoplist() are Python2 legacy — do not touch in v0.9
+  - self.Ptolemy.Pharos.identity refs are stale — ignore in v0.9
+  - Full Menu rewrite deferred to Plan 2
+
+══════════════════════════════════════════════════════════════════════════════
+SYSTEM: INTERFACE (Pharos/Interface.py)
+══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL : Ptolemy3/Pharos/Interface.py  (1022+ lines, pre-v0.9)
+NEW      : Ptolemy3/Pharos/Interface.py  (patched in-place, v0.9)
+ARCHIVED : Ptolemy3/UnrefinedArchive/pharos_interface/Interface_original.py
+STATUS   : PATCHED
+
+CHANGES (v0.9):
+  - UserDisplay.__init__: self.MINI = False added
+  - UserDisplay.output: phila guard (None-safe)
+    Old: self.output = self.Ptolemy.Philadelphos.setOutput
+    New: phila = self.Ptolemy.Philadelphos
+         self.output = phila.setOutput if phila and hasattr(phila, 'setOutput') else None
+  - UserDisplay.set_mini(mini: bool): controls MONITOR/screensaver in mini mode
+  - UserDisplay.hoverEnterEvent/hoverLeaveEvent: guarded with if not self.MINI
+  - UserDisplay.mousePressEvent: calls self.User._restart_mini_timer()
+  - User.__init__: self._mini, self._mini_timer (30s singleShot → miniaturize)
+  - User.mousePressEvent: restarts mini timer
+  - User._restart_mini_timer(): restore if mini, stop+start timer
+  - User.miniaturize(): hide display + sysTrayList[1:-1] + set_mini(True)
+  - User.restore(): show + set_mini(False)
+
+PLANNED (Plan 2):
+  - Split into PharosInterface.py (User) + PharosDisplay.py (UserDisplay)
+
+══════════════════════════════════════════════════════════════════════════════
+SYSTEM: SHELL (Pharos/PtolShell.py)
+══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL : Ptolemy3/Pharos/PtolShell.py  (701 lines, pre-v0.9)
+NEW      : Ptolemy3/Pharos/PtolShell.py  (patched in-place, v0.9)
+ARCHIVED : Ptolemy3/UnrefinedArchive/pharos_shell/PtolShell_original.py
+STATUS   : PATCHED
+
+CHANGES (v0.9):
+  - /datainput handler: modified to accept path in command string
+    e.g., /DataInput /path/to/corpus  (no blocking input() call in GUI)
+    Falls back to QFileDialog if no path supplied
+  - 'bus' command: changed ptol.bus → ptol.msg_bus for channel/queue methods
+    (ptol.bus = FaceRegistry; ptol.msg_bus = PtolBus message bus)
+  - _FallbackTerm: QTextEdit + QProcess fallback when QTermWidget absent
+  - MetaPrompt modes: '' cyan / >>> green / $ yellow / # red
+  - All Ptolemy C/O paths via PtolBrain → SMIP tower
+
+NOTES:
+  - QTermWidget is a C++ build dep — not yet built on this machine
+  - _FallbackTerm handles pty mode via QProcess /bin/bash -c
+  - _SMNNIPThread drives PtolBrain.generate() off UI thread
+  - ThalamicGate pattern: request → processing → response → idle
+
+══════════════════════════════════════════════════════════════════════════════
+SYSTEM: BRAIN (Pharos/PtolBrain.py)
+══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL : Ptolemy3/Pharos/PtolBrain.py  (213 lines)
+NEW      : Ptolemy3/Pharos/PtolBrain.py  (no change needed in v0.9)
+ARCHIVED : (not archived — no changes)
+STATUS   : VERIFIED OK
+
+NOTES:
+  - Imports SMNNIPLayer3, SMNNIPTowerConstants from Ainulindale.neural_network.smnnip_full_tower
+  - Imports _ReverseTower, _SedenionElement from Philadelphos.Ainur.ainur (optional, caught)
+  - Imports lorenz_stirling from Archimedes.Maths.LorenzStirling (optional, caught)
+  - generate() yields chars from L3 (𝕆 layer) autoregressively
+  - Requires weights in Philadelphos/weights/*.pkl (created by /DataInput)
+
+══════════════════════════════════════════════════════════════════════════════
+SYSTEM: DATA INPUT (Philadelphos/data_input.py)
+══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL : Ptolemy3/Philadelphos/data_input.py  (329+ lines, pre-v0.9)
+NEW      : Ptolemy3/Philadelphos/data_input.py  (patched in-place, v0.9)
+ARCHIVED : Ptolemy3/UnrefinedArchive/working/data_input_original.py
+STATUS   : PATCHED
+
+CHANGES (v0.9):
+  - handle_data_input: accepts corpus_path: Optional[str] = None param
+    If provided, skips input() call — GUI-safe
+  - parse_and_run: extracts path from command string
+    e.g., "/DataInput /path/to/corpus" → corpus_path="/path/to/corpus"
+  - /DataInput flow: loads .txt corpus → trains SMIP tower → saves weights → report
+  - Weights saved to Philadelphos/weights/<corpus_name>_weights.pkl
+
+NOTES:
+  - /DataInput uploads Knowledge (LSH_Datatype enrichment per word)
+  - NOT training a dictionary — each word gets a multidimensional reference
+  - Tower stops after save (server-client model — no persistent compute)
+  - Diagnostic mode (--DM): 5-point focal collapse sweep after ingest
+
+══════════════════════════════════════════════════════════════════════════════
+SYSTEM: PTOLEMY TONGUE (Philadelphos/ptolemy_tongue.py)
+══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL : Ptolemy3/Philadelphos/ptolemy_tongue.py  (pre-v0.9)
+NEW      : no change needed in v0.9
+STATUS   : VERIFIED OK
+
+NOTES:
+  - Pentagonal-Hexagonal fold filter on output glyph stream
+  - Catches: runaway repeats, punctuation storms, bracket overflow, null chars
+  - Conservative: never changes meaning, only geometry
+  - Called last in _ptolemy_respond / _ainur_respond chains
+
+══════════════════════════════════════════════════════════════════════════════
+SYSTEM: FACE REGISTRY (Pharos/PtolRegistry.py)
+══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL : embedded class PtolBus in Ptolemy3.py (lines 119-293)
+NEW      : Ptolemy3/Pharos/PtolRegistry.py (extracted, renamed FaceRegistry)
+ARCHIVED : (embedded code still in Ptolemy3_original.py in UnrefinedArchive)
+STATUS   : EXTRACTED
+
+CHANGES (v0.9):
+  - Class renamed: PtolBus → FaceRegistry
+  - Extracted to Pharos/PtolRegistry.py
+  - Ptolemy3.py updated: from Pharos.PtolRegistry import FaceRegistry
+                          self.bus = FaceRegistry(self)
+  - Naming now unambiguous:
+      self.bus     = FaceRegistry  (face lifecycle: launch/suspend/terminate)
+      self.msg_bus = PtolBus       (message bus: pub/sub/channels/priority)
+
+══════════════════════════════════════════════════════════════════════════════
+SYSTEM: PHILADELPHOS SLOT (Philadelphos/Phila.py)
+══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL : Ptolemy3/Philadelphos/Phila.py  (pre-v0.9)
+NEW      : Ptolemy3/Philadelphos/Phila.py  (patched in-place, v0.9)
+STATUS   : PATCHED
+
+CHANGES (v0.9):
+  - Added Phila class (minimal stub) so _launch_philadelphos() doesn't silently fail
+  - Phila(ptolemy) wraps NEURAL_ARCHITECTURE slot, exposes setOutput → msg_bus.post(CH_LOG)
+  - NEURAL_ARCHITECTURE = None until /DataInput trains tower
+  - C/O path remains PtolShell → PtolBrain (not through Phila in v0.9)
+
+══════════════════════════════════════════════════════════════════════════════
+SYSTEM: LLM ARCHIVE (Philadelphos/ptolemy_core.py)
+══════════════════════════════════════════════════════════════════════════════
+
+ORIGINAL : Ptolemy3/Philadelphos/ptolemy_core.py  (1902 lines)
+NEW      : removed from active codebase
+ARCHIVED : Ptolemy3/UnrefinedArchive/ptolemy_core_llm/ptolemy_core_original.py
+STATUS   : ARCHIVED — LLM ARCHITECTURE
+
+REASON:
+  - Contains WernickeNetwork (BERT-style Transformer encoder)
+  - Contains BrocaNetwork (GPT-style autoregressive Transformer decoder)
+  - Ptolemy is LLH (Lagrangian Laplacian Hamiltonian) NOT LLM
+  - Zero Transformer architecture. Zero next-token prediction.
+  - Incompatible with SMIP tower design.
+  - Retained in UnrefinedArchive as reference only — DO NOT IMPORT.
+
+══════════════════════════════════════════════════════════════════════════════
+INFERENCE PATH (verified v0.9)
+══════════════════════════════════════════════════════════════════════════════
+
+INPUT:
+  text → PtolShell._ptolemy_command() → PtolShell._ptolemy_respond()
+
+THREAD:
+  _SMNNIPThread → PtolBrain.generate(command)
+
+BRAIN:
+  PtolBrain.__init__:
+    load weights from Philadelphos/weights/*.pkl
+    restore SMNNIPLayer3 (𝕆 octonion layer)
+    optional: _ReverseTower (Noether current annotation)
+    optional: lorenz_stirling (basin routing annotation)
+
+  PtolBrain.generate(command):
+    _ReverseTower → Noether current → annotate context
+    seed context from command tail
+    L3.forward() → octonion logits → temperature sampling → char
+    yield char  (streamed to UI via pyqtSignal)
+    at sentence boundary → LorenzStirling basin annotation → stop
+
+FILTER:
+  PtolemyTongue.filter(text)
+    fold-count heuristic → pentagonal / hexagonal geometry check
+    rejects pathological glyphs (runaway repeat, punct storm, etc.)
+
+OUTPUT:
+  write_fn(filtered_text, '#aaffcc')  → _FallbackTerm.write() or QTermWidget
+
+══════════════════════════════════════════════════════════════════════════════
+UNDO INSTRUCTIONS
+══════════════════════════════════════════════════════════════════════════════
+
+If a refactoring breaks a system, restore from UnrefinedArchive:
+
+  cp UnrefinedArchive/kernel/Ptolemy3_original.py Ptolemy3.py
+  cp UnrefinedArchive/pharos_menu/Menu_original.py Pharos/Menu.py
+  cp UnrefinedArchive/pharos_interface/Interface_original.py Pharos/Interface.py
+  cp UnrefinedArchive/pharos_shell/PtolShell_original.py Pharos/PtolShell.py
+  cp UnrefinedArchive/working/data_input_original.py Philadelphos/data_input.py
+  cp UnrefinedArchive/ptolemy_core_llm/ptolemy_core_original.py Philadelphos/ptolemy_core.py
+
+Re-check: PtolRegistry.py is NEW (did not exist before v0.9). Delete it on rollback.
+Re-check: Phila.py Phila class is NEW in v0.9. Rollback by removing the Phila stub class.

@@ -298,7 +298,8 @@ class PWindow(QGraphicsItem):
     def __init__(self, scene_or_widget, widget=None, title='Ptolemy',
                  thread=None, timers=None,
                  x=60, y=60, w=640, h=480,
-                 face_id=None, bus=None, ptolemy=None):
+                 face_id=None, bus=None, ptolemy=None,
+                 undecorated=False):
         """
         Two call signatures are supported:
 
@@ -327,9 +328,10 @@ class PWindow(QGraphicsItem):
         if not timers:
             timers = getattr(widget, '_ptol_timers', [])
 
-        self._face_id = face_id
-        self._bus     = bus
-        self._ptolemy = ptolemy
+        self._face_id     = face_id
+        self._bus         = bus
+        self._ptolemy     = ptolemy
+        self._undecorated = undecorated
 
         super().__init__()
 
@@ -341,11 +343,14 @@ class PWindow(QGraphicsItem):
         self._state   = self.NORMAL
         # face_id/bus/ptolemy already set above in overload block
 
+        # title bar height — zero when undecorated
+        self._title_h = 0 if undecorated else _TITLE_H
+
         # geometry
         self._x       = x
         self._y       = y
         self._w       = w
-        self._h       = h + _TITLE_H
+        self._h       = h + self._title_h
 
         # drag state
         self._drag    = False
@@ -359,7 +364,7 @@ class PWindow(QGraphicsItem):
         # embed the face widget
         self._proxy = QGraphicsProxyWidget(self)
         self._proxy.setWidget(widget)
-        self._proxy.setPos(0, _TITLE_H)
+        self._proxy.setPos(0, self._title_h)
 
         self.setPos(x, y)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)   # we handle drag
@@ -403,6 +408,8 @@ class PWindow(QGraphicsItem):
     # ── paint ──────────────────────────────────────────────────────────────
 
     def paint(self, painter, option, widget=None):
+        if self._undecorated:
+            return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self._w, self._h
 
@@ -555,6 +562,14 @@ class PWindow(QGraphicsItem):
     # ── mouse events ───────────────────────────────────────────────────────
 
     def mousePressEvent(self, event):
+        if self._undecorated:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._drag = True
+                self._drag_offset = event.scenePos()
+                self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+            super().mousePressEvent(event)
+            return
+
         p = event.pos()
 
         if self._close_rect().contains(p):
@@ -606,7 +621,7 @@ class PWindow(QGraphicsItem):
         self._proxy.hide()
 
         # resize chrome to title bar only
-        self._h = _TITLE_H
+        self._h = self._title_h
         self.prepareGeometryChange()
 
         # suspend thread
@@ -628,7 +643,7 @@ class PWindow(QGraphicsItem):
         self._proxy.show()
 
         # restore full height
-        self._h = self._proxy.widget().height() + _TITLE_H
+        self._h = self._proxy.widget().height() + self._title_h
         self.prepareGeometryChange()
 
         # resume thread
