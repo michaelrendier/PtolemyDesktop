@@ -126,7 +126,7 @@ except ImportError:
 # ── Constants ──────────────────────────────────────────────────────────────────
 CHUNK_LINES   = 50_000
 DEFAULT_BATCH = 10
-STATE_FILE    = "ingest_state.json"
+STATE_FILE    = "/ingest_state.json"
 PTOLEMY       = "/usr/bin/ptolemy"
 
 # Global depth — set once from --depth arg, read anywhere in the module.
@@ -772,7 +772,7 @@ def main():
         description="ptolemy full-system ingest (Python3, resumable, run as root)"
     )
     ap.add_argument("--root",        default="/",         help="root directory")
-    ap.add_argument("--first",       default="",          help="priority file (e.g. /SystemTree.txt)")
+    ap.add_argument("--first",       default="/SystemTree.txt", help="priority file, streamed first")
     ap.add_argument("--ptolemy",     default=PTOLEMY,     help="path to ptolemy binary")
     ap.add_argument("--state",       default=STATE_FILE,  help="JSON state file")
     ap.add_argument("--batch-dirs",  type=int, default=DEFAULT_BATCH, help="checkpoint every N dirs")
