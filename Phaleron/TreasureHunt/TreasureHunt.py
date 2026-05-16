@@ -662,6 +662,16 @@ class ResearchThread(QThread):
 			LINKNUMBER += 1
 			self.title = str(LINKNUMBER) + "-" + urllib.request.unquote(link.split('/')[-1])
 
+			try:
+				_page = self.Phaleron.opener.open(link).read().decode('utf-8', errors='ignore')
+				_soup = BeautifulSoup(_page, 'html.parser')
+				_plain = _soup.get_text(separator=' ', strip=True)
+				_learner = getattr(getattr(self.Research, 'Ptolemy', None), 'monad_learner', None)
+				if _learner and _plain:
+					_learner.enqueue(_plain)
+			except Exception:
+				pass
+
 			pdfkit.from_url(link, self.title)
 
 		self.groupFinished.emit(['Wikipedia Group Download Complete', topPage + " group has been downloaded"])
