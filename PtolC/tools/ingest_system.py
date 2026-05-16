@@ -410,19 +410,80 @@ def save_state(state: dict, state_path: str):
 
 # ── Directory discovery ────────────────────────────────────────────────────────
 
+def _check_gvfs_readable(path: str) -> bool:
+    """
+    Test whether a GVFS FUSE mount is accessible by the current process.
+
+    FUSE restricts access to the mounting user by default.  Running as root
+    does NOT bypass this — root still gets EPERM unless 'user_allow_other'
+    is in /etc/fuse.conf AND the mount was created with -o allow_other.
+
+    If this returns False, fix with:
+        echo user_allow_other >> /etc/fuse.conf
+    Then remount the drive in the file manager and re-run.
+    """
+    try:
+        next(iter(os.scandir(path)), None)
+        return True
+    except PermissionError:
+        return False
+    except Exception:
+        return True   # other errors are not FUSE permission blocks
+
+
 def auto_extra_roots() -> list[str]:
     """
-    Detect GVFS mounts and external drives without assuming a username.
-    Running as root means $USER is 'root', so scan all of /media/.
+    Detect GVFS mounts (all user sessions) and external drives.
+
+    Running as root means os.getuid()==0, so /run/user/0/gvfs/ is empty —
+    the real GVFS mounts live under the logged-in user's uid (e.g. 1000).
+    Scan ALL /run/user/<uid>/gvfs/ directories regardless of current uid.
+
+    Google Drive appears as:
+        /run/user/<uid>/gvfs/google-drive:host=gmail.com,user=<name>
+    The file manager URI google-drive://user@gmail.com/ maps to exactly
+    that path.  os.walk() traverses it like any other directory tree.
+
+    FUSE permission note: if a GVFS path is detected but unreadable as root,
+    a clear warning is printed with the fix.  The mount is still added to
+    the list so --extra can be used manually after fixing fuse.conf.
     """
     extras = []
-    uid  = os.getuid()
-    gvfs = f"/run/user/{uid}/gvfs"
-    if os.path.isdir(gvfs):
-        for entry in os.scandir(gvfs):
-            if entry.is_dir():
-                LOG.info("GVFS mount: %s", entry.path)
-                extras.append(entry.path)
+
+    # ── GVFS: scan every active user session ─────────────────────────────────
+    run_user = "/run/user"
+    if os.path.isdir(run_user):
+        for uid_entry in os.scandir(run_user):
+            if not uid_entry.is_dir():
+                continue
+            gvfs = os.path.join(uid_entry.path, "gvfs")
+            if not os.path.isdir(gvfs):
+                continue
+            for entry in os.scandir(gvfs):
+                if not entry.is_dir():
+                    continue
+                name = entry.name
+                # Identify and label Google Drive mounts clearly
+                if name.startswith("google-drive:"):
+                    label = "Google Drive"
+                elif name.startswith("smb-share:"):
+                    label = "SMB share"
+                elif name.startswith("sftp:"):
+                    label = "SFTP"
+                else:
+                    label = "GVFS"
+                if _check_gvfs_readable(entry.path):
+                    LOG.info("%s: %s", label, entry.path)
+                    extras.append(entry.path)
+                else:
+                    LOG.warning(
+                        "%s found but NOT readable as root: %s\n"
+                        "  Fix: add 'user_allow_other' to /etc/fuse.conf,\n"
+                        "  then remount the drive in your file manager.",
+                        label, entry.path
+                    )
+
+    # ── External drives: all of /media/ ──────────────────────────────────────
     if os.path.isdir("/media"):
         for user_entry in os.scandir("/media"):
             if not user_entry.is_dir():
@@ -431,6 +492,7 @@ def auto_extra_roots() -> list[str]:
                 if vol_entry.is_dir():
                     LOG.info("External drive: %s", vol_entry.path)
                     extras.append(vol_entry.path)
+
     return extras
 
 
