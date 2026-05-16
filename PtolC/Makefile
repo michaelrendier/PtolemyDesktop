@@ -4,11 +4,21 @@ CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra -std=c11 -D_POSIX_C_SOURCE=200809L
 LDFLAGS = -lm
 
+# ── Optional: libxml2 (HTML/XML extraction) ───────────────────────────────────
+HAVE_XML := $(shell pkg-config --exists libxml-2.0 2>/dev/null && echo yes)
+ifeq ($(HAVE_XML),yes)
+    CFLAGS  += -DHAVE_LIBXML2 $(shell pkg-config --cflags libxml-2.0)
+    LDFLAGS += $(shell pkg-config --libs libxml-2.0)
+endif
+
 TARGET  = ptolemy
-SRCS    = main.c monad.c checkpoint.c tokenizer.c
+SRCS    = main.c monad.c checkpoint.c tokenizer.c filter.c ingest.c log.c daemon.c
 OBJS    = $(SRCS:.c=.o)
 
-.PHONY: all clean export corpus full expand ingest
+PREFIX     ?= /usr/local
+MANDIR     ?= $(PREFIX)/share/man
+
+.PHONY: all clean export corpus full expand ingest install install-man install-systemd
 
 all: $(TARGET)
 
@@ -48,12 +58,35 @@ FIRST ?= /SystemTree.txt
 ingest: $(TARGET)
 	python3 tools/ingest_system.py --root / --first $(FIRST)
 
-# Remove build artifacts
+# ── Install ──────────────────────────────────────────────────────────────────
+install: $(TARGET) install-man
+	install -Dm755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/ptolemy
+	install -Dm755 tools/checkpoint_expand $(DESTDIR)$(PREFIX)/bin/checkpoint_expand
+
+install-systemd:
+	install -Dm644 systemd/ptolemy.socket \
+	    $(DESTDIR)$(PREFIX)/lib/systemd/user/ptolemy.socket
+	install -Dm644 systemd/ptolemy.service \
+	    $(DESTDIR)$(PREFIX)/lib/systemd/user/ptolemy.service
+	@echo "Enable with: systemctl --user enable --now ptolemy.socket"
+
+install-man:
+	install -Dm644 man/ptolemy.1 $(DESTDIR)$(MANDIR)/man1/ptolemy.1
+	install -Dm644 man/ptolemyignore.5 $(DESTDIR)$(MANDIR)/man5/ptolemyignore.5
+	gzip -f $(DESTDIR)$(MANDIR)/man1/ptolemy.1
+	gzip -f $(DESTDIR)$(MANDIR)/man5/ptolemyignore.5
+
+# ── Remove build artifacts ────────────────────────────────────────────────────
 clean:
 	rm -f $(OBJS) $(TARGET) tools/checkpoint_expand
+	rm -f ~/.ptolemy/logs/ptolemy_test_*.log 2>/dev/null || true
 
 # ── Dependencies ────────────────────────────────────────────────────────────
-main.o:        main.c ptolemy.h monad.h checkpoint.h tokenizer.h
-monad.o:       monad.c ptolemy.h monad.h tokenizer.h
+main.o:        main.c ptolemy.h monad.h checkpoint.h tokenizer.h ingest.h daemon.h log.h
+monad.o:       monad.c ptolemy.h monad.h filter.h tokenizer.h
 checkpoint.o:  checkpoint.c ptolemy.h checkpoint.h monad.h
 tokenizer.o:   tokenizer.c tokenizer.h
+filter.o:      filter.c filter.h
+ingest.o:      ingest.c monad.h filter.h checkpoint.h ingest.h log.h
+log.o:         log.c log.h
+daemon.o:      daemon.c ptolemy.h monad.h checkpoint.h daemon.h log.h

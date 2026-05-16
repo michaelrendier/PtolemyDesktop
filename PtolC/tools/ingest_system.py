@@ -60,6 +60,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -126,8 +127,8 @@ except ImportError:
 # ── Constants ──────────────────────────────────────────────────────────────────
 CHUNK_LINES   = 50_000
 DEFAULT_BATCH = 10
-STATE_FILE    = "/ingest_state.json"
-PTOLEMY       = "/usr/bin/ptolemy"
+STATE_FILE    = os.path.join(os.path.expanduser("~"), ".ptolemy", "ingest_state.json")
+PTOLEMY       = shutil.which("ptolemy") or "/usr/bin/ptolemy"
 
 # Global depth — set once from --depth arg, read anywhere in the module.
 # Determines which extraction layers are active (see docstring).

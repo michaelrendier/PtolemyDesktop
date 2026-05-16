@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Philadelphos/monad.py — The Monad  (standalone, v2.0.0)
+Philadelphos/monad.py — The Monad  (standalone, v2.1.0)
 =========================================================
 H_hat_RB field engine.  No external dependencies.
 
@@ -21,9 +21,10 @@ Architecture (H_hat_RB):
     Learning   = deepening V(β), not encoding
 
 Primary API:
-    learn(text)              — deepen V(β) from text; text is discarded
-    hear(text)  → Ψ          — text → [(zero_idx, E), ...] activations
-    speak(query) → str       — query → Noether current → response
+    learn(text)                    — deepen V(β) from text (prose rules)
+    learn_ex(text, filetype)       — deepen V(β) with explicit filetype filter
+    hear(text)  → Ψ               — text → [(zero_idx, E), ...] activations
+    speak(query) → str             — query → Noether current → response
 
 Ground state (σ=0, quasi-prime, pointer=0):
     G_p(0) = p^0 = 1 for ALL primes — no gauge differentiation (EOM_ym = 0)
@@ -43,13 +44,25 @@ Confidence stratification (non-negotiable):
     THEORETICAL : structurally motivated, testable
     CONJECTURE  : direction established, derivation pending
 
+v2.1.0 additions (mirrors PtolC v1.111):
+    - Native Space strata: NS_SIGMA_R/C/H/O/S, NS_SIGMA_TEXT
+    - NSFiletype constants + per-filetype FTRules dispatch
+    - token_accept() / filetype_from_ext() — learn-time token filter
+    - learn_ex(text, filetype) — explicit filetype; learn() wraps as prose
+    - PEM guard: refuses text starting with '-----BEGIN '
+    - rejected_count tracked on Monad instance
+    - vocab entries carry (word, E, home_stratum, gen_stratum)
+    - health() — β distribution, entropy, top A-edges, pollution, rejections
+    - Checkpoint v2.1: vocab entries save/restore stratums; v2.0 loads cleanly
+
 Author: O Captain My Captain
 CLAUDE-SMMNIP-00729-56714-24600
-Date: 2026-05-14
+Date: 2026-05-16
 """
 
 import os
 import re
+import sys
 import json
 import math
 
@@ -62,6 +75,36 @@ TAU_DEFAULT =  5.0        # capacitor memory depth
 N_DEFAULT   = 25_000      # Riemann zero basis size (corpus-invariant)
 
 _PHI        = (1.0 + math.sqrt(5)) / 2.0   # golden ratio
+
+# ── Native Space — Dixon tower strata (Cayley-Dickson doubling) ───────────────
+# All Hamiltonian expressions live in Native Space (radial complex spherical
+# polar coordinates). Cartesian output is a terminal projection only.
+NS_SIGMA_R    = 0   # σ₀  ℝ   — real, enumerable
+NS_SIGMA_C    = 1   # σ₁  ℂ   — complex, relational
+NS_SIGMA_H    = 2   # σ₂  ℍ   — quaternion, non-commuting
+NS_SIGMA_O    = 3   # σ₃  𝕆   — octonion, non-associating
+NS_SIGMA_S    = 4   # σ₄  𝕊   — sedenion, non-alternative
+NS_SIGMA_TEXT = NS_SIGMA_C   # default stratum for natural language tokens
+
+# ── Filetype constants ────────────────────────────────────────────────────────
+NS_FT_PROSE  = 0   # plain text, markdown, RST, LaTeX, BibTeX
+NS_FT_CODE   = 1   # source code — identifiers + comments
+NS_FT_MARKUP = 2   # HTML/XML text nodes (post-extraction)
+NS_FT_DOC    = 3   # PDF/DOCX/ODT/RTF prose output
+NS_FT_AUTO   = -1  # fall back to prose rules
+
+# Per-filetype acceptance rules — mirrors filter.c FILETYPE_RULES exactly.
+#   max_len, allow_hex, allow_slash, allow_high_dig, allow_long_caps, b64_min_len
+_FILETYPE_RULES: dict[int, dict] = {
+    NS_FT_PROSE:  {'max_len': 24, 'allow_hex': False, 'allow_slash': False,
+                   'allow_high_dig': False, 'allow_long_caps': False, 'b64_min_len': 16},
+    NS_FT_CODE:   {'max_len': 40, 'allow_hex': False, 'allow_slash': False,
+                   'allow_high_dig': True,  'allow_long_caps': True,  'b64_min_len': 0},
+    NS_FT_MARKUP: {'max_len': 24, 'allow_hex': False, 'allow_slash': False,
+                   'allow_high_dig': False, 'allow_long_caps': False, 'b64_min_len': 16},
+    NS_FT_DOC:    {'max_len': 24, 'allow_hex': False, 'allow_slash': False,
+                   'allow_high_dig': False, 'allow_long_caps': False, 'b64_min_len': 16},
+}
 
 # ── First 20 Riemann zeros — exact (Odlyzko / LMFDB)  (ESTABLISHED) ──────────
 _EXACT_ZEROS: list[float] = [
@@ -115,20 +158,101 @@ def _str_to_int(text: str) -> int:
         v = v * _N_BASE + (_CH_IDX.get(ch, 0) + 1)
     return max(v - 1, 0)
 
-def _word_coords(surface: str) -> tuple[int, float]:
+def _word_coords(surface: str) -> tuple[float, float]:
     """
-    surface → (zero_idx, E_magnitude)
+    surface → (seed, E_magnitude)
     seed = (HyperIndex(surface) · φ) mod 1  — golden-ratio hash, uniform in [0,1]
     idx  = int(seed · N)                    — uniform across full zero basis
     E    = D_STAR_SPEC + seed · (OMEGA_ZS − D_STAR_SPEC) ∈ [0.246, 0.567]
-
-    N is passed in at call time so the mapping is basis-aware.
-    Deterministic: same surface always returns same (idx, E) for a given N.
     """
     n    = _str_to_int(surface)
     seed = (n * _PHI) % 1.0
     E    = D_STAR_SPEC + seed * (OMEGA_ZS - D_STAR_SPEC)
-    return seed, E   # caller multiplies seed by N for the index
+    return seed, E
+
+
+# ── Token filter — mirrors filter.c exactly ───────────────────────────────────
+
+def _is_pure_numeric(s: str) -> bool:
+    return bool(s) and all(c.isdigit() for c in s)
+
+def _is_hex_string(s: str) -> bool:
+    if len(s) >= 3 and s[:2].lower() == '0x':
+        return True
+    if len(s) < 6:
+        return False
+    return all(c in '0123456789abcdefABCDEF' for c in s)
+
+def _is_uuid(s: str) -> bool:
+    if len(s) != 36:
+        return False
+    dash_pos = {8, 13, 18, 23}
+    for i, c in enumerate(s):
+        if i in dash_pos:
+            if c != '-':
+                return False
+        elif c not in '0123456789abcdefABCDEF':
+            return False
+    return True
+
+def _is_base64_chunk(s: str, min_len: int) -> bool:
+    if len(s) < min_len or s[-1] != '=':
+        return False
+    ok = sum(1 for c in s if c.isalnum() or c in '+/=')
+    return ok * 100 // len(s) >= 95
+
+def _high_digit_ratio(s: str) -> bool:
+    if not s:
+        return False
+    d = sum(1 for c in s if c.isdigit())
+    return d * 100 // len(s) > 50
+
+def _is_long_allcaps(s: str) -> bool:
+    if len(s) <= 6:
+        return False
+    return all(c == '_' or c.isupper() or c.isdigit() for c in s)
+
+def token_accept(tok: str, ft: int = NS_FT_PROSE) -> bool:
+    """
+    :param tok: NUL-terminated token (lowercase, already normalised).
+    :param ft:  NSFiletype constant for the source document.
+    :returns:   True if the token should be ingested, False if rejected.
+    """
+    r = _FILETYPE_RULES.get(ft, _FILETYPE_RULES[NS_FT_PROSE])
+    n = len(tok)
+
+    # Universal gates
+    if n < 2:                                              return False
+    if n > r['max_len']:                                   return False
+    if _is_pure_numeric(tok):                              return False
+    if _is_uuid(tok):                                      return False
+    if '=' in tok:                                         return False
+    if '://' in tok:                                       return False
+
+    # Filetype-conditional gates
+    if not r['allow_hex']       and _is_hex_string(tok):              return False
+    if not r['allow_slash']     and ('/' in tok or '\\' in tok):      return False
+    if not r['allow_high_dig']  and _high_digit_ratio(tok):           return False
+    if not r['allow_long_caps'] and _is_long_allcaps(tok):            return False
+    if r['b64_min_len'] > 0     and _is_base64_chunk(tok, r['b64_min_len']): return False
+
+    return True
+
+def filetype_from_ext(path: str) -> int:
+    """
+    :param path: File path (only the extension is examined).
+    :returns:    NSFiletype constant.
+    """
+    dot = os.path.splitext(path)[1].lower()
+    if dot in {'.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.py', '.rb',
+               '.sh', '.bash', '.zsh', '.go', '.rs', '.java', '.js', '.ts',
+               '.pl', '.lua', '.r'}:
+        return NS_FT_CODE
+    if dot in {'.html', '.htm', '.xml', '.svg'}:
+        return NS_FT_MARKUP
+    if dot in {'.pdf', '.doc', '.docx', '.odt', '.rtf'}:
+        return NS_FT_DOC
+    return NS_FT_PROSE
 
 
 # ── Noether balance: σ = 1/2 forced ─────────────────────────────────────────
@@ -183,23 +307,33 @@ class Monad:
 
     Primary API
     -----------
-    m.load()               initialise (σ=0 ground state or restore checkpoint)
-    m.learn(text)          deepen V(β) from text
-    psi = m.hear(text)     text → Ψ field activations
-    response = m.speak(q)  query → Noether current → string
+    m.load()                       initialise (σ=0 ground state or restore checkpoint)
+    m.learn(text)                  deepen V(β) from text (prose filetype rules)
+    m.learn_ex(text, filetype)     deepen V(β) with explicit filetype filter
+    psi = m.hear(text)             text → Ψ field activations
+    response = m.speak(q)          query → Noether current → string
+    m.health()                     field health report (mirrors C monad_health)
     """
 
     def __init__(self, N: int = N_DEFAULT, tau: float = TAU_DEFAULT):
         self.N          = N
         self.tau        = tau
         self._loaded    = False
-        self.zeros:     list[float]                  = []
-        self.beta:      dict[int, float]             = {}   # BLUE: VEV at each zero
-        self.A:         dict[tuple[int,int], float]  = {}   # RED:  gauge connections
-        self.vocab:     dict[int, tuple[str,float]]  = {}   # zero_idx → (word, E)
-        self._cap:      _Cap | None                  = None
-        self._ground:   float                        = 0.0
-        self._wc:       int                          = 0    # word count
+
+        # Field state
+        self.zeros:   list[float]                             = []
+        self.beta:    dict[int, float]                        = {}
+        self.A:       dict[tuple[int,int], float]             = {}
+
+        # vocab: zero_idx → (word, E, home_stratum, gen_stratum)
+        self.vocab:   dict[int, tuple[str, float, int, int]]  = {}
+
+        self._cap:    _Cap | None = None
+        self._ground: float       = 0.0
+        self._wc:     int         = 0       # total word tokens processed
+
+        # Learn-time filter rejection counter
+        self.rejected_count: int  = 0
 
         # Recency, saturation, spontaneous emission
         self._age               = [0] * N
@@ -229,9 +363,10 @@ class Monad:
             self.A     = {}
             self.vocab = {}
             self._wc   = 0
-            self._age        = [0] * self.N
-            self._saturated  = set()
-            self._conv_touched = set()
+            self.rejected_count  = 0
+            self._age            = [0] * self.N
+            self._saturated      = set()
+            self._conv_touched   = set()
         self._loaded = True
 
     def unload(self) -> None:
@@ -248,17 +383,27 @@ class Monad:
         seed, E = _word_coords(surface)
         return min(int(seed * self.N), self.N - 1), E
 
-    # ── learn ─────────────────────────────────────────────────────────────────
+    # ── learn_ex ──────────────────────────────────────────────────────────────
 
-    def learn(self, text: str) -> set:
+    def learn_ex(self, text: str, filetype: int = NS_FT_PROSE) -> set:
         """
-        Feed text through H_RB.
-        Each word deepens V(β) at its Riemann zero address.
-        Co-activating words in a sentence increment A at weight E_i·E_j/|γ_i−γ_j|.
+        Feed text through H_RB with explicit filetype for token filtering.
+
+        :param text:     Input text.
+        :param filetype: NSFiletype constant — governs per-filetype acceptance rules.
+        :returns:        Set of zero indices activated.
+
+        Each token passes token_accept(tok, filetype) before being assigned a
+        zero slot.  Rejection increments self.rejected_count silently.
         Text is discarded after processing.  Only the field state grows.
         Learning = deepening.  Not encoding.  Not storing.
-        Returns set of zero indices activated (for emission check).
         """
+        # PEM guard — refuse key/certificate material regardless of source
+        if text.startswith('-----BEGIN '):
+            print('[Monad] refused: PEM-encoded key or certificate material '
+                  '(-----BEGIN ... header detected)', file=sys.stderr)
+            return set()
+
         perturbed: set[int] = set()
         for sentence in re.split(r'[.!?\n]+', text):
             tokens = sentence.split()
@@ -270,25 +415,25 @@ class Monad:
                 surface = re.sub(r"[^\w']", '', token).lower()
                 if not surface:
                     continue
+                if not token_accept(surface, filetype):
+                    self.rejected_count += 1
+                    continue
                 idx, E = self._idx_E(surface)
 
-                # Deepen the vacuum — skip β if saturated, still update A
                 if idx not in self._saturated:
                     new_beta = self.beta.get(idx, self._ground) + E * ALPHA_LEARN
                     self.beta[idx] = new_beta
                     if abs(new_beta) > self._beta_sat:
                         self._saturated.add(idx)
 
-                # Vocabulary: highest-E representative per zero wins
+                # Vocab: highest-E representative wins; carry stratum
                 if idx not in self.vocab or E > self.vocab[idx][1]:
-                    self.vocab[idx] = (surface, E)
+                    self.vocab[idx] = (surface, E, NS_SIGMA_TEXT, NS_SIGMA_TEXT)
 
                 activated.append((idx, E))
                 perturbed.add(idx)
                 self._wc += 1
 
-            # Gauge connections: w = E_i·E_j / |γ_i−γ_j|
-            # Nearby co-activating zeros couple strongly.
             for i in range(len(activated)):
                 idx_i, e_i = activated[i]
                 for j in range(i + 1, len(activated)):
@@ -300,6 +445,18 @@ class Monad:
                     self.A[key] = self.A.get(key, 0.0) + e_i * e_j / max(dist, 1e-4)
 
         return perturbed
+
+    # ── learn (prose wrapper) ─────────────────────────────────────────────────
+
+    def learn(self, text: str) -> set:
+        """
+        Feed text through H_RB using prose filetype rules.
+        Wrapper for learn_ex(text, NS_FT_PROSE).
+
+        :param text: Input text.
+        :returns:    Set of zero indices activated.
+        """
+        return self.learn_ex(text, NS_FT_PROSE)
 
     # ── hear ──────────────────────────────────────────────────────────────────
 
@@ -321,7 +478,6 @@ class Monad:
     # ── Recency, saturation, spontaneous emission ─────────────────────────────
 
     def _advance_age(self) -> None:
-        """Advance age counters. Called at end of each speak()."""
         for n in range(self.N):
             if n in self._conv_touched:
                 self._age[n] = 0
@@ -330,19 +486,17 @@ class Monad:
         self._conv_touched.clear()
 
     def _w(self, n: int) -> float:
-        """Recency weight: 1.0 at age=0, decays exponentially."""
         return math.exp(-self._lambda * self._age[n])
 
     def _compute_j_norm(self) -> float:
-        """Total field energy weighted by recency. Used by check_emission()."""
         norm = 0.0
-        for idx, (word, E) in self.vocab.items():
-            b = self.beta.get(idx, self._ground)
-            norm += b * E * E * self._w(idx)
+        for idx, entry in self.vocab.items():
+            E = entry[1]
+            b = self.beta.get(idx, self._ground) * self._w(idx)
+            norm += b * E * E
         return norm
 
     def _context_overlap(self, perturbed_set: set) -> int:
-        """Count recently active zeros overlapping with perturbed_set."""
         recent = {n for n in range(self.N) if self._age[n] < 3}
         return len(perturbed_set & recent)
 
@@ -350,8 +504,7 @@ class Monad:
         """Return spontaneous speech if field energy exceeds threshold, else None."""
         if not self._autonomous_speech:
             return None
-        j_norm = self._compute_j_norm()
-        if j_norm > self._emission_threshold:
+        if self._compute_j_norm() > self._emission_threshold:
             return self.speak('')
         return None
 
@@ -367,24 +520,19 @@ class Monad:
         Noether current from Ψ activation under (β, A).
 
         Primary:    J_i  = β_i · E_i²
-        Propagated: J_j += J_i · A[(i,j)] · β_j   (one step through gauge connections)
+        Propagated: J_j += J_i · A[(i,j)] · β_j
 
-        This is what MUST flow.  The response is not chosen — forced by
-        conservation of Noether charge under the current field state.
-        CONFIDENCE: ESTABLISHED (conservation law, not heuristic)
+        CONFIDENCE: ESTABLISHED
         """
         J: dict[int, float] = {}
-
         for idx, E in psi:
             b      = self.beta.get(idx, self._ground) * self._w(idx)
             J[idx] = J.get(idx, 0.0) + b * E * E
-
         for (i, j), w in self.A.items():
             if i in J:
                 J[j] = J.get(j, 0.0) + J[i] * w * self.beta.get(j, self._ground) * self._w(j)
             if j in J:
                 J[i] = J.get(i, 0.0) + J[j] * w * self.beta.get(i, self._ground) * self._w(i)
-
         return J
 
     # ── speak ─────────────────────────────────────────────────────────────────
@@ -398,9 +546,8 @@ class Monad:
         if query and query.strip():
             psi = self.hear(query)
         else:
-            # Spontaneous emission: field speaks from its own state
             psi = sorted(
-                ((idx, v[1]) for idx, v in self.vocab.items()),
+                ((idx, entry[1]) for idx, entry in self.vocab.items()),
                 key=lambda item: self.beta.get(item[0], self._ground) * self._w(item[0]),
                 reverse=True
             )[:max_tokens]
@@ -412,7 +559,7 @@ class Monad:
             self._advance_age()
             return ''
         words: list[str] = []
-        seen: set[str]   = set()
+        seen:  set[str]  = set()
         for idx, _ in sorted(J.items(), key=lambda kv: kv[1], reverse=True):
             if idx in self.vocab:
                 w = self.vocab[idx][0]
@@ -424,30 +571,150 @@ class Monad:
         self._advance_age()
         return ' '.join(words)
 
-    # ── Diagnostic ────────────────────────────────────────────────────────────
+    # ── Diagnostics ───────────────────────────────────────────────────────────
 
     def lookup(self, word: str) -> dict:
-        """Word → field depth + Noether invariants."""
+        """Word → field depth + Noether invariants + stratum."""
         surface = word.strip().lower()
         idx, E  = self._idx_E(surface)
         sigma   = _forced_sigma(E)
         dc      = self._cap.charge(E) if self._cap else 0.0
+        hs = self.vocab[idx][2] if idx in self.vocab else NS_SIGMA_TEXT
+        gs = self.vocab[idx][3] if idx in self.vocab else NS_SIGMA_TEXT
         return {
-            'surface'   : surface,
-            'gamma'     : self.zeros[idx] if self.zeros else 0.0,
-            'zero_idx'  : idx,
-            'sigma'     : sigma,
-            'E'         : E,
-            'dc'        : dc,
-            'beta_depth': self.beta.get(idx, self._ground),
-            'in_vocab'  : idx in self.vocab,
+            'surface'      : surface,
+            'gamma'        : self.zeros[idx] if self.zeros else 0.0,
+            'zero_idx'     : idx,
+            'sigma'        : sigma,
+            'E'            : E,
+            'dc'           : dc,
+            'beta_depth'   : self.beta.get(idx, self._ground),
+            'in_vocab'     : idx in self.vocab,
+            'home_stratum' : hs,
+            'gen_stratum'  : gs,
         }
+
+    def status(self) -> dict:
+        if not self._loaded:
+            return {'loaded': False}
+        depths = list(self.beta.values())
+        if depths:
+            dv = max(depths)
+            di = depths.index(dv)
+        else:
+            dv, di = 0.0, -1
+        return {
+            'loaded'         : True,
+            'N'              : self.N,
+            'word_count'     : self._wc,
+            'vocab_size'     : len(self.vocab),
+            'connections'    : len(self.A),
+            'rejected_count' : self.rejected_count,
+            'deepest_zero'   : self.zeros[di] if di >= 0 else 0.0,
+            'deepest_beta'   : dv,
+            'ground_vev'     : self._ground,
+            'bao'            : self.bao_check(),
+        }
+
+    def health(self) -> dict:
+        """
+        Field health report — mirrors C monad_health().
+
+        :returns: Dict with β distribution, entropy, top A-edges, pollution count,
+                  vocabulary coverage, and rejected token count.
+        """
+        beta_sat = self._beta_sat
+        b_ground = b_low = b_mid = b_high = b_sat = 0
+        beta_sum = 0.0
+        pollution = 0
+
+        for i in range(self.N):
+            b = self.beta.get(i, self._ground)
+            beta_sum += b
+            if b < 0.1:        b_ground += 1
+            elif b < 2.0:      b_low    += 1
+            elif b < 5.0:      b_mid    += 1
+            elif b < beta_sat: b_high   += 1
+            else:              b_sat    += 1
+
+            if i in self.vocab:
+                w, *_ = self.vocab[i]
+                wl = len(w)
+                if wl < 2 or wl > 24:
+                    pollution += 1
+                elif any(ord(c) > 127 for c in w):
+                    pollution += 1
+
+        # Field entropy H = -Σ p_i * log2(p_i), occupied zeros only
+        entropy = 0.0
+        if beta_sum > 0.0:
+            for i in range(self.N):
+                b = self.beta.get(i, 0.0)
+                if b < 1e-12:
+                    continue
+                p = b / beta_sum
+                entropy -= p * math.log2(p)
+
+        # Top 10 A-edges by weight
+        top_a = sorted(self.A.items(), key=lambda kv: kv[1], reverse=True)[:10]
+
+        vocab_count = len(self.vocab)
+        coverage    = 100.0 * vocab_count / self.N if self.N > 0 else 0.0
+        max_entropy = math.log2(vocab_count) if vocab_count > 1 else 0.0
+
+        return {
+            'vocab_count'    : vocab_count,
+            'N'              : self.N,
+            'coverage_pct'   : coverage,
+            'entropy_bits'   : entropy,
+            'entropy_max'    : max_entropy,
+            'beta_ground'    : b_ground,
+            'beta_low'       : b_low,
+            'beta_mid'       : b_mid,
+            'beta_high'      : b_high,
+            'beta_sat'       : b_sat,
+            'pollution'      : pollution,
+            'rejected_count' : self.rejected_count,
+            'a_edges'        : len(self.A),
+            'top_a_edges'    : [
+                {
+                    'i': k[0], 'j': k[1],
+                    'wi': self.vocab.get(k[0], ('?',))[0],
+                    'wj': self.vocab.get(k[1], ('?',))[0],
+                    'weight': v,
+                }
+                for k, v in top_a
+            ],
+        }
+
+    def print_health(self, file=None) -> None:
+        """Print health report to file (default: stdout)."""
+        if file is None:
+            file = sys.stdout
+        h = self.health()
+        print(f'\n[field health]', file=file)
+        print(f'  vocab   {h["vocab_count"]} / {h["N"]}  ({h["coverage_pct"]:.1f}% coverage)',
+              file=file)
+        print(f'  entropy H = {h["entropy_bits"]:.4f} bits  '
+              f'(max={h["entropy_max"]:.4f} for {h["vocab_count"]} occupied zeros)',
+              file=file)
+        print(f'  β dist  ground={h["beta_ground"]:<6} low={h["beta_low"]:<6} '
+              f'mid={h["beta_mid"]:<6} high={h["beta_high"]:<6} sat={h["beta_sat"]}',
+              file=file)
+        print(f'  pollution indicators: {h["pollution"]} tokens', file=file)
+        print(f'  rejected (learn-time filter): {h["rejected_count"]} tokens', file=file)
+        print(f'  A edges {h["a_edges"]}', file=file)
+        if h['top_a_edges']:
+            print(f'\n  top A edges:', file=file)
+            for t, e in enumerate(h['top_a_edges'], 1):
+                print(f'    {t:2}. {e["wi"]:<20} — {e["wj"]:<20}  w={e["weight"]:.4f}',
+                      file=file)
+        print('', file=file)
 
     def bao_check(self) -> dict:
         """
         BAO coherence: dc_sum converging to OMEGA_ZS = 0.56714 is the
-        computational signature of field coherence — Lambert W fixed point
-        as convergence criterion for the zero projection map.
+        computational signature of field coherence.
         CONFIDENCE: THEORETICAL
         """
         depths  = list(self.beta.values())
@@ -462,32 +729,12 @@ class Monad:
             'omega_zs'   : OMEGA_ZS,
         }
 
-    def status(self) -> dict:
-        if not self._loaded:
-            return {'loaded': False}
-        depths = list(self.beta.values())
-        if depths:
-            dv = max(depths)
-            di = depths.index(dv)
-        else:
-            dv, di = 0.0, -1
-        return {
-            'loaded'      : True,
-            'N'           : self.N,
-            'word_count'  : self._wc,
-            'vocab_size'  : len(self.vocab),
-            'connections' : len(self.A),
-            'deepest_zero': self.zeros[di] if di >= 0 else 0.0,
-            'deepest_beta': dv,
-            'ground_vev'  : self._ground,
-            'bao'         : self.bao_check(),
-        }
-
     # ── Checkpoint ────────────────────────────────────────────────────────────
 
     def save(self, path: str, max_connections: int = 500_000) -> None:
         """
-        Save field state as JSON.
+        Save field state as JSON (v2.1).
+        Vocab entries: [word, E, home_stratum, gen_stratum].
         Only non-ground β entries and top-K connections by weight are stored.
         """
         if not self._loaded:
@@ -497,13 +744,16 @@ class Monad:
             os.makedirs(dirpart, exist_ok=True)
         top_A = sorted(self.A.items(), key=lambda kv: kv[1], reverse=True)
         ck = {
-            'version'            : '2.0.0',
+            'version'            : '2.1.0',
             'N'                  : self.N,
             'word_count'         : self._wc,
+            'rejected_count'     : self.rejected_count,
             'emission_threshold' : self._emission_threshold,
             'beta'               : {str(k): v for k, v in self.beta.items()
                                     if v > self._ground * 1.001},
-            'A'                  : {f'{k[0]},{k[1]}': v for k, v in top_A[:max_connections]},
+            'A'                  : {f'{k[0]},{k[1]}': v
+                                    for k, v in top_A[:max_connections]},
+            # vocab: [word, E, home_stratum, gen_stratum]
             'vocab'              : {str(k): list(v) for k, v in self.vocab.items()},
             'age'                : self._age,
         }
@@ -515,9 +765,10 @@ class Monad:
     def _restore(self, path: str) -> None:
         with open(path) as f:
             ck = json.load(f)
-        self._wc   = ck.get('word_count', 0)
+        self._wc             = ck.get('word_count', 0)
+        self.rejected_count  = ck.get('rejected_count', 0)
         self._emission_threshold = ck.get('emission_threshold', abs(L_GROUND) * 2.0)
-        self.beta  = {i: self._ground for i in range(self.N)}
+        self.beta = {i: self._ground for i in range(self.N)}
         for k, v in ck.get('beta', {}).items():
             self.beta[int(k)] = v
         self.A = {}
@@ -526,7 +777,12 @@ class Monad:
             self.A[(i, j)] = v
         self.vocab = {}
         for k, v in ck.get('vocab', {}).items():
-            self.vocab[int(k)] = (v[0], v[1])
+            # v2.0 format: [word, E] — default stratums to NS_SIGMA_TEXT
+            # v2.1 format: [word, E, home_stratum, gen_stratum]
+            if len(v) >= 4:
+                self.vocab[int(k)] = (v[0], v[1], int(v[2]), int(v[3]))
+            else:
+                self.vocab[int(k)] = (v[0], v[1], NS_SIGMA_TEXT, NS_SIGMA_TEXT)
         loaded_age = ck.get('age', None)
         if loaded_age and len(loaded_age) == self.N:
             self._age = loaded_age
@@ -539,7 +795,7 @@ class Monad:
 # ── CLI verification ──────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    print('Monad — H_hat_RB Field Engine  v2.0.0  (standalone)')
+    print('Monad — H_hat_RB Field Engine  v2.1.0  (standalone)')
     print('=' * 60)
 
     m = Monad(N=1000, tau=5.0)
@@ -552,7 +808,7 @@ if __name__ == '__main__':
     m.learn('Water flows downhill by the path of least resistance.')
     m.learn('The prime preexists the alphabet.')
 
-    print(f'\nvocab={len(m.vocab)}  connections={len(m.A)}')
+    print(f'\nvocab={len(m.vocab)}  connections={len(m.A)}  rejected={m.rejected_count}')
     print(f'\n  speak("what chased")    → {m.speak("what chased")}')
     print(f'  speak("what is mind")   → {m.speak("what is mind")}')
     print(f'  speak("water flows")    → {m.speak("water flows")}')
@@ -562,3 +818,22 @@ if __name__ == '__main__':
 
     print(f'\n  lookup("water")  → {m.lookup("water")}')
     print(f'\n  bao_check()      → {m.bao_check()}')
+
+    # Test: PEM guard
+    m.learn('-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----')
+    print(f'\n  [PEM guard: above learn() should have been refused]')
+
+    # Test: learn_ex with code filetype
+    m.learn_ex('def calculate_entropy(beta_values): return sum(v for v in beta_values)',
+               NS_FT_CODE)
+    print(f'  vocab after code learn_ex={len(m.vocab)}  rejected={m.rejected_count}')
+
+    # Test: filetype_from_ext
+    assert filetype_from_ext('notes.txt')   == NS_FT_PROSE
+    assert filetype_from_ext('engine.py')   == NS_FT_CODE
+    assert filetype_from_ext('index.html')  == NS_FT_MARKUP
+    assert filetype_from_ext('thesis.pdf')  == NS_FT_DOC
+    print('\n  filetype_from_ext: all assertions passed')
+
+    print()
+    m.print_health()
