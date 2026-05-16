@@ -125,3 +125,7 @@ Callimachus/LLM_Datatype/From Quantum Foam To Life.docx
 
 # Archimedes math crawler output
 Archimedes/Maths/math_data/
+
+# PtolC compiled artifacts
+PtolC/*.o
+PtolC/ptolemy
