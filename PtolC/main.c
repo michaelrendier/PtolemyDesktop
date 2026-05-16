@@ -176,8 +176,8 @@ static const char *find_checkpoint(const char *flag_path)
         "monad_wordnet.bin",
         NULL
     };
-    for (int i = 0; cands[i]; i++) {
-        if (!cands[i][0]) continue;
+    for (int i = 0; i < (int)(sizeof(cands)/sizeof(cands[0])) - 1; i++) {
+        if (!cands[i] || !cands[i][0]) continue;
         FILE *t = fopen(cands[i], "rb");
         if (t) {
             fclose(t);
@@ -191,7 +191,7 @@ static const char *find_checkpoint(const char *flag_path)
 
 static void print_version(void)
 {
-    printf("ptolemy %s — H_hat_RB Field Engine\n", PTOLEMY_VERSION);
+    printf("ptolemy %s — RedBlue Geometries Engine\n", PTOLEMY_VERSION);
     printf("  Riemann zeros   N=%d\n", MONAD_N_DEFAULT);
     printf("  σ = ½           Noether forcing: J(σ,E)=0 iff σ=½\n");
     printf("  β_sat = %.3f    L_ground = %.3f\n", MONAD_BETA_SAT, MONAD_L_GROUND);
@@ -205,7 +205,7 @@ static void print_version(void)
 static void print_usage(void)
 {
     fprintf(stderr,
-        "ptolemy %s — H_hat_RB Field Engine\n\n"
+        "ptolemy %s — RedBlue Geometries Engine\n\n"
         "  -l <file|url|->  learn from file, URL, or stdin\n"
         "  -I <path>        ingest directory or file (Native Space whitelist)\n"
         "  -h <prompt>      hear → Noether response\n"

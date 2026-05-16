@@ -2,6 +2,13 @@ PtolC NEWS — user-visible changes by release
 
 See CHANGELOG.md in the repository root for full detail.
 
+Version 1.112 (2026-05-16)
+  * Bug fix: ptolemy -s without -c now loads ~/.ptolemy/monad_wordnet.bin
+    correctly.  The default checkpoint search loop exited early on a NULL
+    candidate before reaching the home-directory path.
+  * Version and usage strings updated to "RedBlue Geometries Engine".
+  * PtolC/TODO added (GNU-standard open work items).
+
 Version 1.111 (2026-05-16)
   * Learn-time token filter: per-filetype rules (prose/code/markup/doc)
     reject numeric, UUID, hex, base64, long-caps, and overlength tokens

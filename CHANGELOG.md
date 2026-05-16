@@ -4,6 +4,31 @@ All releases are preserved. Version format: v1.NNN — single increment per rele
 
 ---
 
+## v1.112 — 2026-05-16
+
+**PtolC — checkpoint default path fix + terminology cleanup**
+
+### Binary
+
+- `find_checkpoint()` — fixed null-termination loop bug: loop exited on
+  first NULL candidate (flag_path) before reaching `~/.ptolemy/monad_wordnet.bin`;
+  `ptolemy -s` without `-c` now loads the default checkpoint correctly
+- `print_version()` / `print_usage()` — "H_hat_RB Field Engine" →
+  "RedBlue Geometries Engine" (terminology propagated to binary output)
+
+### Python
+
+- No change from v2.1.0.
+
+### Project
+
+- `PtolC/TODO` — GNU-standard open work items file added; post-commit hook
+  auto-syncs TODO to `michaelrendier/SMMIP` on every commit that touches it
+- Checkpoint milestone: Documents ingest complete — 23,895 vocab,
+  9,600,426 A-edges, 34,494,302 words; baseline `monad_wordnet.bin` 148 MB
+
+---
+
 ## v1.111 — 2026-05-16
 
 **PtolC — C binary feature-complete**
