@@ -102,6 +102,11 @@ void   monad_learn_ex(Monad *m, const char *text, int verbose, NSFiletype ft);
  * Caller owns returned string.  Returns "" (not NULL) on empty field. */
 char  *monad_speak(Monad *m, const char *query, int max_tokens, int verbose);
 
+/* Wick-rotated speak: J_wick = β × E² × sin(σ·E)  — imaginary Noether current.
+ * Applies σ → iσ rotation; selects words by oscillatory rather than geometric
+ * component of the field.  Inside-the-wave perspective.  Invoked by -W flag. */
+char  *monad_speak_wick(Monad *m, const char *query, int max_tokens, int verbose);
+
 /* ── Word addressing ──────────────────────────────────────────────────────── */
 
 /* Compute (idx, E) for a surface form.  Pure function, no side effects. */

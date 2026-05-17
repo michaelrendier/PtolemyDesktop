@@ -128,7 +128,7 @@ static Arg parse_arg(const char *a)
             case 'l': case 'h': case 's': case 'w':
             case 'c': case 'n': case 'V': case 'i':
             case 'I': case 'q': case 'd': case 'D':
-            case 'F': case 'S':
+            case 'F': case 'S': case 'W':
                 r.primary = *p; break;
             default: break;
         }
@@ -245,7 +245,8 @@ static void print_usage(void)
         "ptolemy %s — RedBlue Geometries Engine\n\n"
         "  -l <file|url|->  learn from file, URL, or stdin\n"
         "  -I <path>        ingest directory or file (Native Space whitelist)\n"
-        "  -h <prompt>      hear → Noether response\n"
+        "  -h <prompt>      hear → Noether response  (real J: β×E²)\n"
+        "  -W <prompt>      hear → Wick-rotated response  (imaginary J: β×E²×sin(E/2))\n"
         "  -D <query>       send query to running daemon\n"
         "  -d               start daemon (keeps monad resident in memory)\n"
         "  -s               status  (or spontaneous speak if verbose)\n"
@@ -441,6 +442,16 @@ int main(int argc, char *argv[])
 
         /* -S : socket path (handled in pre-scan, skip here) ─────────── */
         if (a.primary == 'S') { i++; continue; }
+
+        /* -W : hear → Wick-rotated speak (σ → iσ, imaginary J) ─────────── */
+        if (a.primary == 'W' && i + 1 < argc) {
+            const char *query = argv[++i];
+            int wv = (verbose >= 1) ? verbose : a.v;
+            char *response = monad_speak_wick(m, query, 50, wv);
+            printf("%s\n", response);
+            free(response);
+            continue;
+        }
 
         /* -h : hear → speak ──────────────────────────────────────────── */
         if (a.primary == 'h' && i + 1 < argc) {

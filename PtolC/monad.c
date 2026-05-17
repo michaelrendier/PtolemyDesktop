@@ -654,6 +654,97 @@ char *monad_speak(Monad *m, const char *query, int max_tokens, int verbose)
     return out;
 }
 
+/* ── Wick-rotated speak — imaginary Noether current ─────────────────────── *
+ *
+ * Applies the Wick rotation σ → iσ to the Noether current:
+ *
+ *   J_real  = β × E²              (standard speak — real, geometric)
+ *   J_wick  = β × E² × sin(σ·E)  (imaginary component after rotation)
+ *
+ * σ = ½ is fixed, so: J_wick = β × E² × sin(E/2)
+ *
+ * sin(E/2) modulates E² by the oscillatory factor — words that resonate
+ * with the imaginary axis are promoted.  This is the "inside the wave"
+ * perspective: topology → language, geometry → meaning.
+ *
+ * Invoked by -W flag.  All other mechanics (A-propagation, surface filter)
+ * are identical to monad_speak().
+ */
+char *monad_speak_wick(Monad *m, const char *query, int max_tokens, int verbose)
+{
+    int n_act = 0;
+    Activation *psi;
+
+    if (query && query[0]) {
+        psi = monad_hear_raw(m, query, &n_act, verbose);
+    } else {
+        int cap = m->N < 200 ? m->N : 200;
+        psi = malloc(cap * sizeof(Activation));
+        for (int i = 0; i < cap; i++) {
+            psi[i].idx = i;
+            psi[i].E   = m->vocab[i].present ? m->vocab[i].E : MONAD_D_STAR;
+        }
+        n_act = cap;
+    }
+
+    double *J = malloc((size_t)m->N * sizeof(double));
+    memset(J, 0, (size_t)m->N * sizeof(double));
+
+    /* Wick-rotated primary current: β × E² × sin(σ·E),  σ = 0.5 */
+    for (int k = 0; k < n_act; k++) {
+        int idx = psi[k].idx; double E = psi[k].E;
+        double w = exp(-MONAD_LAMBDA * m->age[idx]);
+        J[idx] += m->beta[idx] * E * E * sin(0.5 * E) * w;
+    }
+
+    /* A propagation — same topology, Wick-rotated weights */
+    for (int k = 0; k < m->am_cap; k++) {
+        if (m->am[k].key == 0) continue;
+        int    i  = (int)(m->am[k].key >> 15);
+        int    j  = (int)(m->am[k].key & 0x7FFF);
+        double aw = m->am[k].val;
+        double wi = exp(-MONAD_LAMBDA * m->age[i]);
+        double wj = exp(-MONAD_LAMBDA * m->age[j]);
+        if (J[i] > 0.0) J[j] += J[i] * aw * m->beta[j] * wj;
+        if (J[j] > 0.0) J[i] += J[j] * aw * m->beta[i] * wi;
+    }
+
+    int     njv = 0;
+    JEntry *jv  = malloc((size_t)m->N * sizeof(JEntry));
+    for (int i = 0; i < m->N; i++) {
+        if (J[i] > 0.0 && m->vocab[i].present) {
+            jv[njv].idx = i; jv[njv].J = J[i]; njv++;
+        }
+    }
+    qsort(jv, njv, sizeof(JEntry), jcmp);
+
+    if (verbose >= 1) {
+        vout("[J_wick — Wick-rotated Noether current  σ→iσ]\n");
+        int show = njv < 12 ? njv : 12;
+        for (int k = 0; k < show; k++)
+            vout("  %2d. %-20s z#%-6d  J_w=%.4e\n",
+                 k+1, m->vocab[jv[k].idx].word, jv[k].idx, jv[k].J);
+    }
+
+    int   out_cap = max_tokens * (MAX_WORD_LEN + 1) + 4;
+    char *out     = malloc(out_cap);
+    out[0] = '\0';
+    int written = 0;
+    for (int i = 0; i < njv && written < max_tokens; i++) {
+        const char *w = m->vocab[jv[i].idx].word;
+        if (!token_accept(w, NS_FT_PROSE)) continue;
+        if (out[0]) strncat(out, " ", out_cap - strlen(out) - 1);
+        strncat(out, w, out_cap - strlen(out) - 1);
+        written++;
+    }
+
+    for (int i = 0; i < m->N; i++) m->age[i]++;
+    for (int k = 0; k < n_act; k++) m->age[psi[k].idx] = 0;
+
+    free(J); free(jv); free(psi);
+    return out;
+}
+
 /* ── Diagnostics ─────────────────────────────────────────────────────────── */
 
 void monad_status(const Monad *m, FILE *out)
