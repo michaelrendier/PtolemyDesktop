@@ -4,6 +4,27 @@ All releases are preserved. Version format: v1.NNN — single increment per rele
 
 ---
 
+## v1.113 — 2026-05-17
+
+**PtolC — speak() surface filter; monad_English.bin baseline**
+
+### Binary
+
+- `monad_speak()` — output now passes through `token_accept(NS_FT_PROSE)`
+  before emission; polluted tokens (consonant clusters, apostrophe
+  fragments, hex strings) are skipped in the response while remaining
+  present in the internal field; the topology is unchanged, only the
+  surface is filtered
+- `monad_English.bin` — clean WordNet-only baseline (14,164 vocab,
+  766,027 A-edges, 1,608,903 words, 3.6% pollution, deepest word:
+  "philadelphos"); archived as canonical starting point in SMMIP releases
+
+### Python
+
+- No change from v2.1.0.
+
+---
+
 ## v1.112 — 2026-05-16
 
 **PtolC — auto checkpoint assessment after -I ingest**

@@ -637,6 +637,7 @@ char *monad_speak(Monad *m, const char *query, int max_tokens, int verbose)
     int written = 0;
     for (int i = 0; i < njv && written < max_tokens; i++) {
         const char *w = m->vocab[jv[i].idx].word;
+        if (!token_accept(w, NS_FT_PROSE)) continue;   /* surface filter */
         if (out[0]) strncat(out, " ", out_cap - strlen(out) - 1);
         strncat(out, w, out_cap - strlen(out) - 1);
         written++;

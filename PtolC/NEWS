@@ -2,6 +2,13 @@ PtolC NEWS — user-visible changes by release
 
 See CHANGELOG.md in the repository root for full detail.
 
+Version 1.113 (2026-05-17)
+  * monad_speak() output filtered through token_accept(NS_FT_PROSE):
+    consonant clusters, apostrophe fragments, and hex strings are now
+    skipped in responses.  Internal field topology unchanged.
+  * monad_English.bin: clean WordNet-only baseline released.
+    14,164 vocab / 766,027 A-edges / deepest word: "philadelphos".
+
 Version 1.112 (2026-05-16)
   * Auto-assessment: after every -I ingest, ptolemy runs eval_checkpoint.py
     on the saved checkpoint and writes <checkpoint>.assessment.json.
