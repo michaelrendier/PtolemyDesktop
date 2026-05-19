@@ -2,7 +2,7 @@
  * PtolC/checkpoint.c — Binary checkpoint loader/saver.
  *
  * Format (all little-endian):
- *   Header:  magic[4] version[4] N[4] vocab_size[4] A_size[4] wc[4] threshold[8]
+ *   Header:  magic[4] version[4] N[4] vocab_size[4] A_size[4] wc[4] threshold[8] affect[4]
  *   Beta:    N * double
  *   Age:     N * int32
  *   Vocab:   vocab_size * (idx[4] wlen[2] E[8] home_stratum[1] gen_stratum[1] word[wlen])
@@ -75,6 +75,16 @@ int checkpoint_load(Monad *m, const char *path)
     m->word_count         = (int)word_count;
     m->emission_threshold = threshold;
 
+    /* v4: affect (float) after threshold */
+    if (version >= 4) {
+        float af = 0.0f;
+        if (fread(&af, sizeof(float), 1, f) != 1) {
+            fprintf(stderr, "[checkpoint] affect read error\n");
+            fclose(f); return -1;
+        }
+        m->affect = af;
+    }
+
     /* Beta */
     if (fread(m->beta, sizeof(double), N, f) != N) {
         fprintf(stderr, "[checkpoint] beta read error\n");
@@ -120,7 +130,7 @@ int checkpoint_load(Monad *m, const char *path)
         }
     }
 
-    /* Vocab entries — v1: no stratum bytes; v2: home_stratum[1] + gen_stratum[1] after E */
+    /* Vocab entries — v1: no stratum; v2: +home_stratum[1]+gen_stratum[1]; v3: +prose_seen[1] */
     for (uint32_t i = 0; i < vocab_size; i++) {
         uint32_t idx;
         uint16_t wlen;
@@ -129,10 +139,16 @@ int checkpoint_load(Monad *m, const char *path)
             fprintf(stderr, "[checkpoint] vocab entry %u read error\n", i);
             fclose(f); return -1;
         }
-        uint8_t hs = NS_SIGMA_TEXT, gs = NS_SIGMA_TEXT;
+        uint8_t hs = NS_SIGMA_TEXT, gs = NS_SIGMA_TEXT, ps = 0;
         if (version >= 2) {
             if (fread(&hs, 1, 1, f) != 1 || fread(&gs, 1, 1, f) != 1) {
                 fprintf(stderr, "[checkpoint] vocab stratum read error at entry %u\n", i);
+                fclose(f); return -1;
+            }
+        }
+        if (version >= 3) {
+            if (fread(&ps, 1, 1, f) != 1) {
+                fprintf(stderr, "[checkpoint] vocab prose_seen read error at entry %u\n", i);
                 fclose(f); return -1;
             }
         }
@@ -149,6 +165,7 @@ int checkpoint_load(Monad *m, const char *path)
             m->vocab[idx].present      = 1;
             m->vocab[idx].home_stratum = hs;
             m->vocab[idx].gen_stratum  = gs;
+            m->vocab[idx].prose_seen   = ps;
             memcpy(m->vocab[idx].word, word, wlen);
             m->vocab[idx].word[wlen] = '\0';
             monad_wm_set(m, word, idx);
@@ -208,6 +225,7 @@ int checkpoint_save(const Monad *m, const char *path, double min_weight)
     fwrite(&ac,        4, 1, f);
     fwrite(&wc,        4, 1, f);
     fwrite(&m->emission_threshold, 8, 1, f);
+    fwrite(&m->affect, sizeof(float), 1, f);   /* v4: affect (e7 octonion) */
 
     /* Beta */
     fwrite(m->beta, sizeof(double), m->N, f);
@@ -215,7 +233,7 @@ int checkpoint_save(const Monad *m, const char *path, double min_weight)
     /* Age */
     fwrite(m->age, sizeof(int), m->N, f);
 
-    /* Vocab — v2: idx[4] wlen[2] E[8] home_stratum[1] gen_stratum[1] word[wlen] */
+    /* Vocab — v3: idx[4] wlen[2] E[8] home_stratum[1] gen_stratum[1] prose_seen[1] word[wlen] */
     for (int i = 0; i < m->N; i++) {
         if (!m->vocab[i].present) continue;
         uint32_t idx  = (uint32_t)i;
@@ -223,11 +241,13 @@ int checkpoint_save(const Monad *m, const char *path, double min_weight)
         double   E    = m->vocab[i].E;
         uint8_t  hs   = m->vocab[i].home_stratum;
         uint8_t  gs   = m->vocab[i].gen_stratum;
+        uint8_t  ps   = m->vocab[i].prose_seen;
         fwrite(&idx,  4, 1, f);
         fwrite(&wlen, 2, 1, f);
         fwrite(&E,    8, 1, f);
         fwrite(&hs,   1, 1, f);
         fwrite(&gs,   1, 1, f);
+        fwrite(&ps,   1, 1, f);
         fwrite(m->vocab[i].word, 1, wlen, f);
     }
 
