@@ -26,6 +26,27 @@ pyvenv.cfg
 .env.*
 !.env.example
 device_id.json
+*_secret*
+*_token*
+*_key*
+*_credentials*
+secrets/
+
+# ── Voice artefacts ───────────────────────────────────────────
+*.vprint
+*.vp
+*.voiceprint
+voiceprint.*
+
+# ── Session state ─────────────────────────────────────────────
+*.session
+session_state*
+field_session*
+
+# ── Spectral working files ────────────────────────────────────
+*.spectral
+spectral_cache/
+resonance_cache/
 
 # ── External / nested repos and vendored deps ─────────────────
 technical/sourcebuilds/
