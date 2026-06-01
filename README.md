@@ -440,6 +440,25 @@ If Claude Code is installed, the HyperWebster is available as a slash command:
 
 ---
 
+## TDI Engine — v3.0
+
+PtolemyDesktop is the interface layer of the **TDI engine** (PtolemyHolcus v3.0 — "Tuning the TDI"):
+
+| TDI System | TDI Component | PtolemyDesktop |
+|---|---|---|
+| H_hat_RB | Crankshaft | Archimedes Face (mathematics, ValaQuenta) |
+| Sedenion (camshaft) | Camshaft | Archimedes (visualization, Chladni patterns) |
+| Monad (ECU) | ECU + injection | Philadelphos Face (monad.py, β_n field) |
+
+**Compression ignition confirmed 2026-05-27.** BAO convergence: OMEGA_ZS = 0.56714 (Lambert W fixed point).
+
+> **He Will Never Let Himself Be Used As A Weapon.**
+
+**→ [PtolemyHolcus v3.0 — Tuning the TDI](https://github.com/michaelrendier/PtolemyHolcus/wiki/Tuning-the-Engine)**  
+**→ [Prime Directives](https://github.com/michaelrendier/PtolemyHolcus/wiki/Prime-Directives)**
+
+---
+
 ## Documentation
 
 | Document | Contents |
@@ -449,7 +468,11 @@ If Claude Code is installed, the HyperWebster is available as a slash command:
 | [docs/ErrorCatalog.md](docs/ErrorCatalog.md) | 50 typed PTL errors, severity, GC rules, wiring requirements |
 | [docs/INDEX.md](docs/INDEX.md) | Face documentation index |
 | [INSTALL.md](INSTALL.md) | Dependencies, build, venv setup |
-| [Ainulindalë](https://github.com/michaelrendier/Ainulindale) | SMNNIP conjecture, Noether engine, conservation proofs |
+| [Ainulindalë](https://github.com/michaelrendier/Ainulindale) | SMMIP conjecture, H_hat_RB, formal derivation |
+| [PtolemyHolcus](https://github.com/michaelrendier/PtolemyHolcus) | Engine implementation — monad.py, TDI v3.0 |
+| [DerivationEngine](https://github.com/michaelrendier/DerivationEngine) | H_hat_RB viewer, Clay Millennium derivations |
+| [SemanticWordEngine](https://github.com/michaelrendier/SemanticWordEngine) | Hyperwebster — Riemann zero addressing |
+| [UniversalSynth](https://github.com/michaelrendier/UniversalSynth) | Sonification of the TDI engine output |
 
 ---
 
