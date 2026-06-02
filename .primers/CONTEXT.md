@@ -92,7 +92,7 @@
 - Gauge group: U(1) × SU(2) × SU(3)
 - Noether conservation: empirically verified — `violation=0.0, conserved=True`
 - Console: `python3 derivation.py` or `/derivation`
-- Engine: `LSHDerivationEngine` in `Philadelphos/Ainulindale/core/smnnip_derivation_pure.py`
+- Engine: `LSHValaQuenta` in `Philadelphos/Ainulindale/core/smnnip_derivation_pure.py`
 
 ---
 

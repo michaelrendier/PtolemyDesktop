@@ -21,7 +21,7 @@ demonstrated by a working derivation engine producing verified results.
 
 Primary result: **Noether conservation verified, violation=0.0, conserved=True**  
 Confidence: **7+ sigma** (discovery threshold in physics is 5 sigma)  
-Proof mechanism: `SMNNIPDerivationEngine` — pure Python, non-obfuscated,
+Proof mechanism: `SMNNIPValaQuenta` — pure Python, non-obfuscated,
 fully reproducible by any reviewer with `python3 derivation.py`
 
 ### Why Nature

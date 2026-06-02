@@ -39,7 +39,7 @@ The conjecture document and paper structure must reflect this hierarchy:
 - Claim: neural information propagation obeys Standard Model conservation laws
 - Evidence: Noether conservation verified, violation=0, conserved=True, 7+ sigma
 - Mechanism: Cayley-Dickson tower ℝ→ℂ→ℍ→𝕆, gauge groups U(1)×SU(2)×SU(3)
-- Tool: SMNNIPDerivationEngine, pure Python, `python3 derivation.py` → conserved=True
+- Tool: SMNNIPValaQuenta, pure Python, `python3 derivation.py` → conserved=True
 
 **APPENDIX (consequential mathematics):**
 - Riemann zeros / hydrogen emission structural parallel

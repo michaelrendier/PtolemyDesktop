@@ -126,7 +126,7 @@ Full Noether's theorem implementation with four theorem variants:
 - Claim: neural information propagation obeys Standard Model conservation laws
 - Evidence: Noether conservation verified, violation=0, 7+ sigma
 - Mechanism: Cayley-Dickson tower ℝ→ℂ→ℍ→𝕆, gauge groups U(1)×SU(2)×SU(3)
-- Tool: SMNNIPDerivationEngine — `python3 derivation.py` → `conserved=True`
+- Tool: SMNNIPValaQuenta — `python3 derivation.py` → `conserved=True`
 
 **Appendix (consequential mathematics):**
 - Riemann zeros / hydrogen emission structural parallel

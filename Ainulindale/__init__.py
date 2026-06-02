@@ -20,7 +20,7 @@ Date: April 2026 — First Age
 # Core engine convenience imports
 try:
     from .core.smnnip_derivation_pure import (
-        SMNNIPDerivationEngine,
+        SMNNIPValaQuenta,
         FieldState,
         Algebra,
         make_element,

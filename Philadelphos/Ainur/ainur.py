@@ -32,9 +32,9 @@ from collections import deque
 # ── SMNNIP engine (optional) ──────────────────────────────────────────────────
 try:
     from Ainulindale.core.smnnip_derivation_pure import (
-        SMNNIPDerivationEngine, FieldState,
+        SMNNIPValaQuenta, FieldState,
     )
-    _ENGINE = SMNNIPDerivationEngine()
+    _ENGINE = SMNNIPValaQuenta()
     ENGINE_AVAILABLE = True
 except Exception:
     _ENGINE = None

@@ -384,12 +384,12 @@ The Philadelphos shell is the primary interface. Each command is prefixed with a
 | `>` | Python REPL (live execution in Ptolemy context) | `> import math; math.pi` |
 | `$` | Bash shell (subprocess, stdout returned) | `$ ls -la ~/Ptolemy` |
 | `#` | Root shell (gksudo, system-level commands) | `# systemctl restart ssh` |
-| `~` | DerivationEngine / HyperWebster semantic layer | `~ tree` |
+| `~` | ValaQuenta / HyperWebster semantic layer | `~ tree` |
 | `ptol out` | Exit Ptolemy | `ptol out` |
 
 ### `~` — Semantic Layer Commands
 
-The `~` prefix routes to the DerivationEngine. Full sub-command set:
+The `~` prefix routes to the ValaQuenta. Full sub-command set:
 
 | Command | Action |
 |---|---|
@@ -470,7 +470,7 @@ PtolemyDesktop is the interface layer of the **TDI engine** (PtolemyHolcus v3.0 
 | [INSTALL.md](INSTALL.md) | Dependencies, build, venv setup |
 | [Ainulindalë](https://github.com/michaelrendier/Ainulindale) | SMMIP conjecture, H_hat_RB, formal derivation |
 | [PtolemyHolcus](https://github.com/michaelrendier/PtolemyHolcus) | Engine implementation — monad.py, TDI v3.0 |
-| [DerivationEngine](https://github.com/michaelrendier/DerivationEngine) | H_hat_RB viewer, Clay Millennium derivations |
+| [ValaQuenta](https://github.com/michaelrendier/ValaQuenta) | H_hat_RB viewer, Clay Millennium derivations |
 | [SemanticWordEngine](https://github.com/michaelrendier/SemanticWordEngine) | Hyperwebster — Riemann zero addressing |
 | [UniversalSynth](https://github.com/michaelrendier/UniversalSynth) | Sonification of the TDI engine output |
 

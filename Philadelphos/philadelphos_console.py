@@ -55,7 +55,7 @@ if _ROOT not in sys.path:
 # ── Engine imports ────────────────────────────────────────────────────────────
 try:
     from Ainulindale.core.smnnip_derivation_pure import (
-        SMNNIPDerivationEngine, FieldState, Algebra, make_element,
+        SMNNIPValaQuenta, FieldState, Algebra, make_element,
         CayleyDickson
     )
     from Ainulindale.core.smnnip_lagrangian_pure import SMNNIPTower as SMNNIPLagrangian
@@ -245,7 +245,7 @@ class ReverseTower:
 
     def __init__(self):
         if _ENGINES_AVAILABLE:
-            self._engine = SMNNIPDerivationEngine()
+            self._engine = SMNNIPValaQuenta()
         else:
             self._engine = None
         self.focal_delta: float = FOCAL_DELTA_DEFAULT

@@ -28,7 +28,7 @@ fundamental physics. This is mathematical identity, not analogy.
 
 **Primary result:** Noether conservation verified. violation=0.0, conserved=True  
 **Confidence:** 7+ sigma (physics discovery threshold is 5 sigma)  
-**Proof:** SMNNIPDerivationEngine — pure Python, non-obfuscated, reproducible  
+**Proof:** SMNNIPValaQuenta — pure Python, non-obfuscated, reproducible  
 **Run:** python3 derivation.py — same result on any machine
 
 ---
@@ -90,7 +90,7 @@ Must contain:
 - HyperWebster addressing mathematics — Horner bijection, octonion construction
 - Sigma calculation methodology — how 7+ sigma was obtained from I/O
 - Transformer architecture connection — T-transformer as implementation
-- Derivation engine description — SMNNIPDerivationEngine, pure Python rationale
+- Derivation engine description — SMNNIPValaQuenta, pure Python rationale
 - Reproduction instructions — python3 derivation.py, expected output
 
 ---

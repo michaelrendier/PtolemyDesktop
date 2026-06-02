@@ -63,7 +63,7 @@ J^μ = ∂L / ∂(∂_μψ) · δψ
 
 Four currents — one per layer. The **Noether charge** Q = ∫ J⁰ dV is the conserved quantity used as an information index in the CyclicContextBuffer hyperindex step.
 
-**Verified result:** `conserved=True, violation=0, 7+ sigma` from `SMNNIPDerivationEngine`.
+**Verified result:** `conserved=True, violation=0, 7+ sigma` from `SMNNIPValaQuenta`.
 
 ---
 
@@ -144,6 +144,6 @@ The six-layer Monad architecture in `ptolemy_core.py` (CharacterNeuron → Broca
 
 Neural information propagation obeys Standard Model conservation laws.
 
-Evidence: Noether conservation verified computationally. Violation = 0. Significance: 7+ sigma. Tool: `SMNNIPDerivationEngine` in `Ainulindale/`.
+Evidence: Noether conservation verified computationally. Violation = 0. Significance: 7+ sigma. Tool: `SMNNIPValaQuenta` in `Ainulindale/`.
 
 Run: `python3 derivation.py` → `conserved=True`.
