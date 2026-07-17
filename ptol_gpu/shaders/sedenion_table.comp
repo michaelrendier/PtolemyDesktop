@@ -1,0 +1,180 @@
+/* sedenion_table.comp — Cayley-Dickson sedenion multiplication table
+ * ─────────────────────────────────────────────────────────────────────
+ * Generates the full 16×16 sedenion multiplication table at GPU init time.
+ * One workgroup. 256 threads (16×16). Each thread owns one table cell.
+ *
+ * Output: table_sign[256] and table_idx[256] — packed into two SSBOs.
+ * Uploaded once. Permanent in GPU memory. The file can be discarded after.
+ *
+ * The 3 layers are baked into the output structure:
+ *   table_idx[a*16+b]  = the basis index  of  e_a * e_b
+ *   table_sign[a*16+b] = the sign  (+1/-1) of  e_a * e_b
+ *
+ * Cayley-Dickson doubling rule:
+ *   (a,b)(c,d) = (ac - d̄b, da + bc̄)
+ *   where ā = conjugate (negate all non-scalar components).
+ *
+ * License: public domain. No copyright. Use once. Discard.
+ */
+#version 430 core
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) writeonly buffer TableSign {
+    int table_sign[256];   /* +1 or -1 for each e_a * e_b */
+};
+layout(std430, binding = 1) writeonly buffer TableIdx {
+    int table_idx[256];    /* basis index 0..15 for each e_a * e_b */
+};
+
+/* Conjugate of basis element k: e₀ → +e₀, e₁..e₁₅ → -eₖ */
+int conj_sign(int k) { return (k == 0) ? 1 : -1; }
+
+/* Cayley-Dickson multiply at level (half-dim n): returns {sign, index}.
+ * Encodes result in a single int: sign × (index+1) with base 1.
+ * Positive = +, negative = -.
+ * 0 is impossible (basis elements never multiply to zero in pre-ZD layers).
+ *
+ * We unroll all 4 levels explicitly: n=1,2,4,8 → ℂ,ℍ,𝕆,𝕊
+ * Level 0 (ℝ, n=1): e₀ only → e₀*e₀ = +e₀
+ */
+
+/* Encode result as packed int: sign in upper bit, index in lower 5 bits.
+ * sign=+1 → 0x20|index, sign=-1 → index (high bit clear = positive here
+ * we use a simpler scheme: positive index = +, negative index = -)
+ * Store sign and index separately in the two SSBOs.
+ */
+
+/* Forward declaration — recursive Cayley-Dickson is unrolled manually
+ * because GLSL does not allow true recursion. We build level by level.
+ *
+ * Level layout:
+ *   n=1:  basis 0         (ℝ)
+ *   n=2:  basis 0,1       (ℂ) — new: e₁
+ *   n=4:  basis 0..3      (ℍ) — new: e₂,e₃
+ *   n=8:  basis 0..7      (𝕆) — new: e₄..e₇
+ *   n=16: basis 0..15     (𝕊) — new: e₈..e₁₅
+ *
+ * Multiplication stored as (sign×(idx+1)) in a local 16×16 table,
+ * then written to SSBO.
+ */
+
+shared int local_sign[16][16];
+shared int local_idx[16][16];
+
+/* ── Level 0: ℝ ──────────────────────────────────────────────────────── */
+void init_real() {
+    /* Only thread (0,0) initialises. Others skip — barrier ensures sync. */
+    if (gl_LocalInvocationID.x == 0 && gl_LocalInvocationID.y == 0) {
+        local_sign[0][0] = 1;
+        local_idx[0][0]  = 0;
+    }
+}
+
+/* ── Cayley-Dickson doubling: extend n-dim table to 2n-dim ──────────── */
+/* Given existing table for basis 0..n-1, add basis n..2n-1.
+ *
+ * For the doubled algebra with half-dim n:
+ *   eₐ = (eₐ, 0)    for a < n   (old basis embedded)
+ *   eₐ₊ₙ = (0, eₐ)  for a < n   (new basis elements)
+ *
+ * Products (all indices mod 2n):
+ *   eₐ * eᵦ       = result of old table[a][b]               (both old)
+ *   eₐ * eᵦ₊ₙ     = conj_sign(a) × old[b][a] → e_(result+n) (old × new)
+ *   eₐ₊ₙ * eᵦ     = old[b][a] conjugated by b               (new × old)
+ *   eₐ₊ₙ * eᵦ₊ₙ   = -old[a][b] conjugated                   (new × new)
+ *
+ * Full Cayley-Dickson (a,b)(c,d) = (ac - d̄b, da + bc̄):
+ *   Basis pairs: (eₐ,0)*(eᵦ,0) = (eₐeᵦ, 0)
+ *   (eₐ,0)*(0,eᵦ) = (0 - eᵦ*ē₀*eₐ, eᵦ*eₐ + 0) = (-0,eᵦeₐ) = (0,eᵦeₐ)
+ *     → eₐ₊ₙ has sign from conj of eₐ, index from old[b][a] but in new half
+ *   (0,eₐ)*(eᵦ,0) = (0*eᵦ - 0*ēₐ, 0*eₐ + eₐ*ēᵦ) = (0, eₐ*conj(eᵦ))
+ *     → sign: conj_sign(b) × sign(old[a][b]), index: old[a][b] + n
+ *   (0,eₐ)*(0,eᵦ) = (0*0 - eᵦ*ēₐ, eᵦ*eₐ + 0) = (-eᵦeₐ, 0) ... wait
+ *     Actually: (0,eₐ)*(0,eᵦ) = (0*0 - ēᵦ*eₐ, eᵦ*0 + eₐ*0̄)
+ *                              = (-ēᵦ*eₐ, 0)
+ *                              = -(conj_sign(b) × old[b][a], 0)
+ */
+void double_table(int n) {
+    /* Thread (a,b) owns cell (a,b) in the 2n×2n output table.
+     * But we only have 16×16 threads and n grows 1→2→4→8.
+     * We fill the 2n×2n block using thread (a%16, b%16).
+     * Since 2n ≤ 16 at all stages, each thread covers exactly one cell. */
+    int a = int(gl_LocalInvocationID.x);
+    int b = int(gl_LocalInvocationID.y);
+
+    if (a >= 2*n || b >= 2*n) return;
+
+    int s, idx;
+
+    if (a < n && b < n) {
+        /* (old, old): eₐ * eᵦ — straight from existing table */
+        s   = local_sign[a][b];
+        idx = local_idx[a][b];
+
+    } else if (a < n && b >= n) {
+        /* (old, new): eₐ * e_(b-n+n) = (eₐ,0)*(0,e_(b-n)) → (0, e_(b-n)*eₐ) */
+        int bh = b - n;
+        s   = local_sign[bh][a];   /* sign of old[bh][a] */
+        idx = local_idx[bh][a] + n; /* result in new (upper) half */
+
+    } else if (a >= n && b < n) {
+        /* (new, old): e_(a-n+n) * eᵦ = (0,e_(a-n))*(eᵦ,0) → (0, e_(a-n)*conj(eᵦ)) */
+        int ah = a - n;
+        int cs = conj_sign(b);      /* conjugate of eᵦ */
+        s   = cs * local_sign[ah][b];
+        idx = local_idx[ah][b] + n;
+
+    } else {
+        /* (new, new): e_(a-n+n) * e_(b-n+n) = (0,e_(a-n))*(0,e_(b-n))
+         *           = (-conj(e_(b-n)) * e_(a-n), 0)
+         *           = -(conj_sign(b-n) × old[b-n][a-n], 0) */
+        int ah = a - n, bh = b - n;
+        int cs = conj_sign(bh);
+        s   = -(cs * local_sign[bh][ah]);
+        idx = local_idx[bh][ah];    /* result in lower half */
+    }
+
+    barrier();
+    local_sign[a][b] = s;
+    local_idx[a][b]  = idx;
+}
+
+void main() {
+    int a = int(gl_LocalInvocationID.x);
+    int b = int(gl_LocalInvocationID.y);
+
+    /* ── Initialise ℝ (1×1) ─────────────────────────────────────────── */
+    /* All threads clear their cell first */
+    local_sign[a][b] = 0;
+    local_idx[a][b]  = 0;
+    barrier();
+
+    init_real();
+    barrier();
+
+    /* ── Double: ℝ→ℂ (n=1→2) ─────────────────────────────────────────── */
+    double_table(1);
+    barrier();
+
+    /* ── Double: ℂ→ℍ (n=2→4) ─────────────────────────────────────────── */
+    double_table(2);
+    barrier();
+
+    /* ── Double: ℍ→𝕆 (n=4→8) ─────────────────────────────────────────── */
+    double_table(4);
+    barrier();
+
+    /* ── Double: 𝕆→𝕊 (n=8→16) — the ZD fault appears here ──────────── */
+    double_table(8);
+    barrier();
+
+    /* ── Write to SSBO ──────────────────────────────────────────────── */
+    /* Correct sign for identity column/row: e₀ * eₐ = eₐ, eₐ * e₀ = eₐ */
+    if (a == 0) { local_sign[0][b] = 1; local_idx[0][b] = b; }
+    if (b == 0) { local_sign[a][0] = 1; local_idx[a][0] = a; }
+    barrier();
+
+    table_sign[a * 16 + b] = local_sign[a][b];
+    table_idx [a * 16 + b] = local_idx[a][b];
+}

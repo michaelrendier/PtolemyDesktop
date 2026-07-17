@@ -1,0 +1,73 @@
+/* null_operator.comp — NULL operator: Σ_RB → L_(I|O)
+ * ─────────────────────────────────────────────────────────────────────
+ * Maps the 16-vector Σ_RB to a sedenion pathway address {I, ZD, O}.
+ *
+ * No free parameters. The sedenion structure is the only constraint.
+ * The field defines the geometry. The operator just reads it.
+ *
+ * Sign   = direction   (positive = UP/future, negative = DOWN/past)
+ * Index  = channel     (which of the 16 prime channels carries the signal)
+ * Magnitude = strength (how far from centre the channel sits)
+ *
+ *   I   = most negative channel — origin (DOWN / past / 'from')
+ *   ZD  = channel nearest zero  — the boundary crossing (ZD fault)
+ *   O   = most positive channel — destination (UP / future / 'to')
+ *
+ * Input  (binding 0): sigma_rb[16] from sigma_rb.comp
+ * Output (binding 1): lio_result[4] = {I, ZD, O, float zd_dist}
+ *
+ * License: public domain. Use once. Discard the file.
+ */
+#version 430 core
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer SigmaRB {
+    float sigma_rb[16];
+};
+layout(std430, binding = 1) writeonly buffer LIO {
+    int   I;           /* origin channel         (DOWN / past)   */
+    int   ZD;          /* ZD boundary channel    (the crossing)  */
+    int   O;           /* destination channel    (UP   / future) */
+    float zd_dist;     /* distance to ZD fault — |sigma_rb[ZD]| */
+};
+
+/* Also write the sigma_rb norm and the Noether product J_red×J_blue
+ * at the identified I and O channels — encodes AM≠GM distance from σ=½ */
+layout(std430, binding = 2) writeonly buffer NoetherCheck {
+    float j_red;         /* |sigma_rb[O]| — UP current   */
+    float j_blue;        /* |sigma_rb[I]| — DOWN current */
+    float j_product;     /* j_red × j_blue — conserved at σ=½ (AM=GM there) */
+    float sigma_rb_norm; /* L2 norm of full Σ_RB vector  */
+};
+
+void main() {
+    float min_v   = sigma_rb[0];
+    float max_v   = sigma_rb[0];
+    float min_abs = abs(sigma_rb[0]);
+    int   i_ch = 0, o_ch = 0, zd_ch = 0;
+    float norm_sq = 0.0;
+
+    for (int k = 0; k < 16; k++) {
+        float v   = sigma_rb[k];
+        float av  = abs(v);
+        norm_sq  += v * v;
+
+        if (v   < min_v)   { min_v   = v;  i_ch  = k; }
+        if (v   > max_v)   { max_v   = v;  o_ch  = k; }
+        if (av  < min_abs) { min_abs = av; zd_ch = k; }
+    }
+
+    I       = i_ch;
+    ZD      = zd_ch;
+    O       = o_ch;
+    zd_dist = min_abs;
+
+    float jr = abs(sigma_rb[o_ch]);   /* J_red  — UP current  */
+    float jb = abs(sigma_rb[i_ch]);   /* J_blue — DOWN current */
+
+    j_red        = jr;
+    j_blue       = jb;
+    j_product    = jr * jb;           /* conserved when AM=GM, i.e. at σ=½ */
+    sigma_rb_norm = sqrt(norm_sq);
+}

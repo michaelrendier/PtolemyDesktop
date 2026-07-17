@@ -1,0 +1,69 @@
+/* sigma_rb.comp — Σ_RB pipeline on GPU
+ * ─────────────────────────────────────────────────────────────────────
+ * Computes Σ_RB(σ) = H_hat_RB(σ) − H_hat_BR(σ) across 16 prime channels.
+ *
+ * σ is a UNIFORM — the live BAO input from the monad field.
+ * Not hardcoded. Not assumed. The field tells the GPU what σ is.
+ *
+ * 16 threads run in parallel — one per prime channel.
+ * Each thread owns one element of the Σ_RB vector.
+ *
+ * Input  (binding 0,1): forward and backward word byte sequences
+ * Output (binding 2):   sigma_rb[16] — the full Σ_RB 16-vector
+ *
+ * License: public domain. Use once. Discard the file.
+ */
+#version 430 core
+
+layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+/* Word sequences: UTF-8 bytes packed 4-per-uint for alignment.
+ * words_fwd: top-β order (H_hat_RB — the 'from' direction)
+ * words_bwd: reverse β order (H_hat_BR — the 'to' direction) */
+layout(std430, binding = 0) readonly buffer WordsFwd {
+    uint words_fwd[];
+};
+layout(std430, binding = 1) readonly buffer WordsBwd {
+    uint words_bwd[];
+};
+layout(std430, binding = 2) writeonly buffer SigmaRB {
+    float sigma_rb[16];
+};
+
+uniform int   u_n;      /* number of bytes in each sequence */
+uniform float u_sigma;  /* live σ — BAO from monad field, NOT 0.5 */
+
+const int   PRIMES[16] = int[16](2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53);
+const float TWO_PI     = 6.28318530717958647692528676656;
+
+/* Extract byte i from packed uint array (0-indexed) */
+float byte_val(uint buf[], int i) {
+    uint word = buf[i >> 2];
+    uint shift = uint((i & 3) * 8);
+    return float((word >> shift) & 0xFFu) / 128.0;
+}
+
+void main() {
+    int k = int(gl_LocalInvocationID.x);   /* prime channel 0..15 */
+    int p = PRIMES[k];
+
+    float x_rb = 0.0;   /* H_hat_RB accumulator */
+    float x_br = 0.0;   /* H_hat_BR accumulator */
+    float norm  = 0.0;
+
+    for (int i = 1; i <= u_n; i++) {
+        float w   = pow(float(i), -u_sigma);          /* Dirichlet weight at σ */
+        float phi = TWO_PI * float(i) / float(p);     /* prime channel phase   */
+        float c   = cos(phi);
+
+        float v_rb = byte_val(words_fwd, i - 1);      /* forward  → H_hat_RB  */
+        float v_br = byte_val(words_bwd, i - 1);      /* backward → H_hat_BR  */
+
+        x_rb += v_rb * w * c;
+        x_br += v_br * w * c;
+        norm  += w;
+    }
+
+    /* Σ_RB = H_hat_RB − H_hat_BR  (the net directional tension) */
+    sigma_rb[k] = (norm > 0.0) ? (x_rb - x_br) / norm : 0.0;
+}
