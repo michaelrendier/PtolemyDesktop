@@ -150,3 +150,6 @@ Archimedes/Maths/math_data/
 # PtolC compiled artifacts
 PtolC/*.o
 PtolC/ptolemy
+
+# Ptolemy3 venv (reproduce with ./Ptolemy3_venv.sh)
+.venv/
