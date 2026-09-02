@@ -38,9 +38,102 @@ import sys
 import textwrap
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 NAME = "ptolemy"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Faces — chat-room identities (Cody, 2026-09-01)
+# ──────────────────────────────────────────────────────────────────────────────
+#  The faces are NOT processes.  They are identities in the Chat Tab: they post
+#  passive reportings and warnings, and Ptolemy (the Monad as stitchboard
+#  operator) weighs their opinions and routes any action through his harness.
+#  Only Archimedes takes direct action.
+#
+#      monad  >  harness  >  chat window  <  passive reportings & warnings
+#                                          <  hardening guided by intrusion type
+#
+#  The Face API is the layer of separation — a face never touches the monad or
+#  the harness directly.
+# ══════════════════════════════════════════════════════════════════════════════
+FACE_ROLES = {
+    "Aule":       "The Forge — process & backlog monitor (passive)",
+    "Mandos":     "The Watchdog — heartbeat & supervisor priority (passive)",
+    # Demetrius of Phaleron advised Ptolemy I and organised the Library of
+    # Alexandria — its first Librarian.  Phaleron advises Ptolemy the same way.
+    "Phaleron":   "The Librarian — Tool Master, catalogue & user-interaction portal (passive, advises)",
+    "Archimedes": "The Encyclopedia — reference; the one face that acts",
+}
+
+
+@dataclass
+class FacePost:
+    who: str
+    level: str = "info"          # info | warn | hardening
+    text: str = ""
+    intrusion: str = ""          # drift | backlog | heartbeat | tool | probe | ...
+    weight: float = 0.0
+    stamp: str = field(default_factory=lambda: time.strftime("%H:%M:%S"))
+
+    def line(self) -> str:
+        mark = {"info": "", "warn": " ⚠", "hardening": " ⚠ HARDENING"}[self.level]
+        tag = f" [{self.intrusion}]" if self.intrusion and self.level != "info" else ""
+        return f"« {self.who} »{mark}{tag} {self.text}"
+
+
+class Face:
+    """A chat-room identity.  `probe()` -> drift in [0,1]; past the harness
+    threshold the face posts a HARDENING line whose adjustment is classified by
+    intrusion type.  `opinion(topic)` -> (stance, weight) for Ptolemy to weigh.
+    Only an `active` face (Archimedes) exposes `act()`."""
+
+    def __init__(self, name: str, role: str = "",
+                 probe: Optional[Callable[[], float]] = None,
+                 adjust: Optional[Callable[[], str]] = None,
+                 intrusion_of: Optional[Callable[[float], str]] = None,
+                 opinion: Optional[Callable[[str], Tuple[str, float]]] = None,
+                 act: Optional[Callable[[str], str]] = None,
+                 active: bool = False) -> None:
+        self.name = name
+        self.role = role or FACE_ROLES.get(name, "(registered)")
+        self._probe = probe or (lambda: 0.0)
+        self._adjust = adjust or (lambda: "logged; no automatic action")
+        self._intrusion_of = intrusion_of or (lambda d: "drift")
+        self._opinion = opinion
+        self._act = act
+        self.active = active
+        self.last_drift = 0.0
+
+    def report(self, threshold: float) -> FacePost:
+        try:
+            d = float(self._probe())
+        except Exception as e:                                    # noqa: BLE001
+            return FacePost(self.name, "warn", f"probe error — {e}", "probe")
+        self.last_drift = d
+        if d > threshold:
+            return FacePost(self.name, "hardening", self._adjust(),
+                            self._intrusion_of(d), weight=d)
+        return FacePost(self.name, "info", f"nominal (drift {d:.2f})", weight=d)
+
+    def opinion(self, topic: str) -> Tuple[str, float]:
+        if self._opinion:
+            try:
+                return self._opinion(topic)
+            except Exception:                                     # noqa: BLE001
+                pass
+        # no topical view: a weak voice, weaker still if the face is drifting,
+        # so a face with a real stance on the topic leads the poll
+        return ("no strong view", round(0.2 * max(0.0, 1.0 - self.last_drift), 2))
+
+    def act(self, request: str) -> Optional[str]:
+        if self.active and self._act:
+            try:
+                return self._act(request)
+            except Exception as e:                                # noqa: BLE001
+                return f"({self.name} error: {e})"
+        return None
 
 
 def _coerce_reply(gen: Any) -> str:
@@ -105,18 +198,19 @@ class MonadLink:
 #  SUPPORT harness  (Tolkien / Diagnostic Support)
 # ══════════════════════════════════════════════════════════════════════════════
 class SupportHarness:
-    """Periodic radio-check over registered faces.  A face's probe returns a
-    drift in [0, 1]; past THRESHOLD it faults and the harness reports the
-    adjustment it made.  Lines go to `sink` (the console)."""
+    """The faces' room.  A periodic poll asks each face for a passive post; the
+    posts go to `sink` (the Chat Tab), attributed to the face.  `latest` keeps
+    the last post per face so Ptolemy can review and poll opinions.  Nothing
+    here acts — Ptolemy routes any action through the active harness, and only
+    Archimedes has an `act()` of its own."""
 
     THRESHOLD = 0.25
     PERIOD = 8.0
 
     def __init__(self, sink: "queue.Queue[str]") -> None:
         self._sink = sink
-        self._faces: Dict[str, Callable[[], float]] = {}
-        self._adjust: Dict[str, Callable[[], str]] = {}
-        self._last: Dict[str, float] = {}
+        self.faces: Dict[str, Face] = {}
+        self.latest: Dict[str, FacePost] = {}
         self._run = False
         self._thr: Optional[threading.Thread] = None
         # some Aule/Mandos modules print on import; keep the screen clean.
@@ -124,92 +218,111 @@ class SupportHarness:
         import io
         with contextlib.redirect_stdout(io.StringIO()), \
              contextlib.redirect_stderr(io.StringIO()):
-            self._wire_existing()
+            self._wire_faces()
 
-    def _wire_existing(self) -> None:
-        # the support harness IS Aule, and Aule has THE FORGE -- already built,
-        # refactor alongside.  Primary probe: the Forge queue's backlog pressure.
-        # Secondary: the Mandos heartbeat watchdog on Aule.
+    # ── build the four faces ────────────────────────────────────────────────
+    def _wire_faces(self) -> None:
+        self.add_face(Face("Aule", probe=self._aule_probe,
+                           adjust=lambda: "the Forge is throttling intake until backlog clears",
+                           intrusion_of=lambda d: "backlog" if d < 0.6 else "flood"))
+        self.add_face(Face("Mandos", probe=self._mandos_probe,
+                           adjust=lambda: "raised supervisor priority over Aule",
+                           intrusion_of=lambda d: "heartbeat"))
+        # Phaleron — the Librarian: passive, fed tool/portal signals by the
+        # console via `note_portal()`; advises when asked.
+        self._portal_load = 0.0
+        self.add_face(Face("Phaleron", probe=lambda: self._portal_load,
+                           adjust=lambda: "narrowed the tool surface to the vetted catalogue",
+                           intrusion_of=lambda d: "tool",
+                           opinion=self._phaleron_opinion))
+        # Archimedes — the Encyclopedia: the one active face.
+        self.add_face(Face("Archimedes", probe=lambda: 0.0,
+                           opinion=self._archimedes_opinion,
+                           act=self._archimedes_act, active=True))
+
+    def _aule_probe(self) -> float:
+        d = 0.0
         try:
             from Aule import forge_queue                          # noqa: PLC0415
             fq = forge_queue.ForgeQueue()
             cap = forge_queue.FORGE_SETTINGS.get("max_queue_depth", 64)
-
-            def forge_probe() -> float:
-                try:
-                    return min(1.0, fq.depth() / max(1, cap))
-                except Exception:                                 # noqa: BLE001
-                    return 0.0
-
-            def forge_adjust() -> str:
-                return "the Forge is throttling intake until backlog clears"
-
-            self.register("aule.forge", forge_probe, forge_adjust)
+            d = max(d, min(1.0, fq.depth() / max(1, cap)))
         except Exception:                                         # noqa: BLE001
             pass
         try:
+            import contextlib
+            import io
             from Aule import aule as _aule                        # noqa: PLC0415
-
-            def aule_bus_probe() -> float:
-                # a stalled event bus (no recent events) is not itself a fault;
-                # report it flat unless status_summary flags trouble.
-                import contextlib
-                import io
-                try:
-                    with contextlib.redirect_stdout(io.StringIO()), \
-                         contextlib.redirect_stderr(io.StringIO()):
-                        s = _aule.status_summary()
-                    if isinstance(s, dict):
-                        return float(s.get("drift", s.get("worst", 0.0)) or 0.0)
-                except Exception:                                 # noqa: BLE001
-                    pass
-                return 0.0
-
-            self.register("aule.bus", aule_bus_probe,
-                          lambda: "logged; Aule bus attention")
+            with contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                s = _aule.status_summary()
+            if isinstance(s, dict):
+                d = max(d, float(s.get("drift", s.get("worst", 0.0)) or 0.0))
         except Exception:                                         # noqa: BLE001
             pass
+        return d
+
+    @staticmethod
+    def _mandos_probe() -> float:
         try:
             from Mandos import mandos_watchdog                    # noqa: PLC0415
-
-            def mandos_probe() -> float:
-                gb = getattr(mandos_watchdog, "_last_beat", None)
-                if not gb:
-                    return 0.0
-                age = time.monotonic() - gb
-                return min(1.0, age / (mandos_watchdog.HEARTBEAT_INTERVAL
-                                       * mandos_watchdog.MISSED_BEATS))
-
-            self.register("mandos.watch(aule)", mandos_probe,
-                          lambda: "Mandos raised supervisor priority over Aule")
+            gb = getattr(mandos_watchdog, "_last_beat", None)
+            if not gb:
+                return 0.0
+            age = time.monotonic() - gb
+            return min(1.0, age / (mandos_watchdog.HEARTBEAT_INTERVAL
+                                   * mandos_watchdog.MISSED_BEATS))
         except Exception:                                         # noqa: BLE001
-            pass
+            return 0.0
+
+    def _phaleron_opinion(self, topic: str) -> Tuple[str, float]:
+        t = topic.lower()
+        if any(w in t for w in ("tool", "run", "open", "file", "user", "ui")):
+            return ("in my catalogue — proceed via the portal", 0.9)
+        return ("outside the catalogue — defer to Archimedes", 0.4)
+
+    def _archimedes_opinion(self, topic: str) -> Tuple[str, float]:
+        t = topic.lower()
+        if any(w in t for w in ("math", "maths", "physics", "prove", "derive",
+                                "equation", "why", "theorem")):
+            return ("this is reference — I can speak to it", 0.9)
+        return ("not a reference question", 0.3)
+
+    @staticmethod
+    def _archimedes_act(request: str) -> str:
+        return (f"Archimedes: (maths/physics .bin not loaded) — noted '{request[:80]}'. "
+                f"Load the domain corpus for a real answer.")
+
+    # ── registry ───────────────────────────────────────────────────────────
+    def add_face(self, face: Face) -> None:
+        self.faces[face.name] = face
 
     def register(self, name: str, probe: Callable[[], float],
                  adjust: Optional[Callable[[], str]] = None) -> None:
-        self._faces[name] = probe
-        self._adjust[name] = adjust or (lambda: "logged; no automatic action")
-        self._last[name] = 0.0
+        """Back-compat: register a bare probe/adjust as a passive face."""
+        self.add_face(Face(name, role="(registered)", probe=probe, adjust=adjust))
 
+    def note_portal(self, load: float) -> None:
+        """Console feeds Phaleron the current tool/user-portal load in [0,1]."""
+        self._portal_load = max(0.0, min(1.0, float(load)))
+
+    # ── the poll ───────────────────────────────────────────────────────────
     def radio_check(self) -> List[str]:
-        stamp = time.strftime("%H:%M:%S")
         lines: List[str] = []
-        for name, probe in self._faces.items():
-            try:
-                drift = float(probe())
-            except Exception as e:                                # noqa: BLE001
-                lines.append(f"[RADIO {stamp}] {name}: probe error — {e}")
-                continue
-            self._last[name] = drift
-            if drift > self.THRESHOLD:
-                action = self._adjust[name]()
-                lines.append(f"[RADIO {stamp}] {name}: DRIFT {drift:.2f} > "
-                             f"{self.THRESHOLD:.2f} — {action}")
-            else:
-                lines.append(f"[RADIO {stamp}] {name}: nominal (drift {drift:.2f})")
-        if not self._faces:
-            lines.append(f"[RADIO {stamp}] no faces registered — support harness idle")
+        for name, face in self.faces.items():
+            post = face.report(self.THRESHOLD)
+            self.latest[name] = post
+            lines.append(f"[{post.stamp}] {post.line()}")
+        if not self.faces:
+            lines.append(f"[{time.strftime('%H:%M:%S')}] no faces — support room empty")
         return lines
+
+    def opinions(self, topic: str) -> List[Tuple[str, str, float]]:
+        out = []
+        for name, face in self.faces.items():
+            stance, weight = face.opinion(topic)
+            out.append((name, stance, float(weight)))
+        return sorted(out, key=lambda r: -r[2])
 
     def _loop(self) -> None:
         while self._run:
@@ -231,10 +344,12 @@ class SupportHarness:
         self._run = False
 
     def status(self) -> str:
-        if not self._last:
-            return "idle"
-        worst = max(self._last.values())
-        return f"{len(self._last)} faces, worst drift {worst:.2f}"
+        if not self.latest:
+            return f"{len(self.faces)} faces, no poll yet"
+        worst = max(p.weight for p in self.latest.values())
+        warns = sum(1 for p in self.latest.values() if p.level != "info")
+        return (f"{len(self.faces)} faces, worst drift {worst:.2f}"
+                + (f", {warns} warning(s)" if warns else ""))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -281,6 +396,7 @@ class StitchBoard:
         self.monad = MonadLink()
         self.support = SupportHarness(self.sink)
         self.active = ActiveHarness(self.monad)
+        self._acked: set = set()          # (face, stamp, level) already routed
 
     # -- routing --------------------------------------------------------------
     def route(self, msg: str) -> str:
@@ -297,6 +413,22 @@ class StitchBoard:
             return self.active.present(m[6:], kind="tool-request")
         if m.startswith("/diag"):
             return f"support: {self.support.status()}   active: {self.active.status()}"
+        if m.startswith("/faces"):
+            rows = []
+            for name, face in self.support.faces.items():
+                p = self.support.latest.get(name)
+                tail = f"  ({p.level}, drift {p.weight:.2f})" if p else ""
+                star = " *acts*" if face.active else ""
+                rows.append(f"  {name}{star} — {face.role}{tail}")
+            return "faces:\n" + "\n".join(rows)
+        if m.startswith("/poll ") or m.startswith("/ask "):
+            topic = m.split(" ", 1)[1]
+            return self.poll_opinions(topic)
+        if m.startswith("/enc ") or m.startswith("/archimedes "):
+            q = m.split(" ", 1)[1]
+            arch = self.support.faces.get("Archimedes")
+            out = arch.act(q) if arch else None
+            return out or "(Archimedes unavailable)"
         if m.startswith("/monad"):
             arg = m[6:].strip().lower()
             if arg in ("off", "detach", "0"):
@@ -321,6 +453,35 @@ class StitchBoard:
     def drain(self) -> List[str]:
         return self._drain_support()
 
+    # -- Ptolemy reviewing / polling the support room -----------------------
+    def review_faces(self) -> List[str]:
+        """Ptolemy looks at the latest face posts; for a warn / hardening post
+        not yet acknowledged he routes it through the active harness and
+        records a one-line ack.  Passive posts he leaves for the Chat Tab."""
+        acks: List[str] = []
+        for name, post in list(self.support.latest.items()):
+            if post.level == "info":
+                continue
+            key = (name, post.stamp, post.level)
+            if key in self._acked:
+                continue
+            self._acked.add(key)
+            routed = self.active.present(
+                f"{name}: {post.text}", kind=f"face-{post.level}")
+            acks.append(f"{NAME}: ack «{name}» [{post.intrusion or post.level}] "
+                        f"→ {str(routed)[:80]}")
+        return acks
+
+    def poll_opinions(self, topic: str) -> str:
+        rows = self.support.opinions(topic)
+        if not rows:
+            return "(no faces to poll)"
+        body = "\n".join(f"  {n:<10} {w:.2f}  {s}" for n, s, w in rows)
+        lead, lstance, lw = rows[0]
+        direct = (f"{NAME} directs: follow {lead} ({lstance})" if lw >= 0.5
+                  else f"{NAME} directs: no strong opinion — hold")
+        return f"weighted opinions on '{topic}':\n{body}\n{direct}"
+
     def status_line(self) -> str:
         return (f"monad:{self.monad.status()}  "
                 f"active:{self.active.status()}  "
@@ -344,7 +505,8 @@ class PtolemyConsole:
         self.board = board
         self.registry = registry
         self.lines: List[str] = [
-            f"{NAME} console — PtolemyDesktop Core.  Tab: derivation UI   /diag /radio /tool   q: quit",
+            f"{NAME} console — PtolemyDesktop Core.  Tab: ValaQuenta   "
+            f"/faces /poll /enc /radio /diag /tool   q: quit",
             f"  {board.status_line()}", ""]
         self.input = ""
 
@@ -353,7 +515,9 @@ class PtolemyConsole:
             self.lines.append(seg)
 
     def _flush_support(self) -> None:
-        for ln in self.board.drain():
+        for ln in self.board.drain():                 # face posts -> Chat Tab
+            self._push(ln)
+        for ln in self.board.review_faces():          # Ptolemy's acks
             self._push(ln)
 
     def run(self) -> None:
@@ -438,11 +602,15 @@ def selftest() -> int:
     print(f"=== {NAME} console selftest ===")
     b = StitchBoard()
     print("status:", b.status_line())
+    print("faces:", ", ".join(b.support.faces))
     b.support.register("demo_face", lambda: 0.4, lambda: "throttled demo_face ingest")
-    for msg in ("hello ptolemy", "/diag", "/radio", "what is the derivation engine"):
+    for msg in ("hello ptolemy", "/faces", "/radio", "/poll open the tool file",
+                "/enc why is sigma one half", "/diag"):
         print(f"\n{NAME}> {msg}")
         print("  ->", b.route(msg))
         for ln in b.drain():
+            print("    ", ln)
+        for ln in b.review_faces():
             print("    ", ln)
     reg = _load_registry()
     print("\nValaQuenta registry:", (f"{len(reg.list_modules())} engines" if reg else "unavailable"))
@@ -464,6 +632,8 @@ def run_port() -> int:
         while True:
             f = port.recv(timeout=1.0)
             for ln in board.drain():
+                port.send({"t": "radio", "line": ln})
+            for ln in board.review_faces():
                 port.send({"t": "radio", "line": ln})
             if f is None:
                 continue
