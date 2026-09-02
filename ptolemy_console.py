@@ -33,6 +33,10 @@ from __future__ import annotations
 
 import argparse
 import curses
+import difflib
+import fnmatch
+import os
+import pathlib
 import queue
 import sys
 import textwrap
@@ -134,6 +138,122 @@ class Face:
             except Exception as e:                                # noqa: BLE001
                 return f"({self.name} error: {e})"
         return None
+
+    # ── Face API: code access (read anytime; writes are Ptolemy-gated) ──────
+    def read_code(self, gate: "CodeGate", path: str) -> str:
+        return gate.read(path)
+
+    def propose(self, gate: "CodeGate", path: str, new_text: str,
+                reason: str) -> "Proposal":
+        """Request a code write.  Returns a PENDING Proposal — nothing lands on
+        disk until Ptolemy approves it (`StitchBoard` `/approve`)."""
+        return gate.propose(self.name, path, new_text, reason)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CodeGate — faces may read repo code and PROPOSE writes; Ptolemy approves
+# ──────────────────────────────────────────────────────────────────────────────
+#  "faces get code writing privileges ... but it's locked behind Ptol's
+#  control" (Cody, 2026-09-01).  A face can read any permitted file and queue a
+#  full-file replacement with a reason; the diff sits pending until Ptolemy
+#  approves it, and only then is it written — original backed up first.
+#  .py only; never .git / .venv / __pycache__ / *.bin / *_token* / *_secret*.
+# ══════════════════════════════════════════════════════════════════════════════
+@dataclass
+class Proposal:
+    pid: int
+    face: str
+    path: str                    # gate-relative
+    reason: str
+    new_text: str
+    diff: str
+    stamp: str = field(default_factory=lambda: time.strftime("%H:%M:%S"))
+    status: str = "pending"      # pending | applied | rejected
+    note: str = ""
+
+    def stat(self) -> Tuple[int, int]:
+        adds = sum(1 for l in self.diff.splitlines()
+                   if l.startswith("+") and not l.startswith("+++"))
+        dels = sum(1 for l in self.diff.splitlines()
+                   if l.startswith("-") and not l.startswith("---"))
+        return adds, dels
+
+
+class CodeGate:
+    ALLOW_EXT = {".py"}
+    DENY_PARTS = {".git", ".venv", "__pycache__", "secrets", "node_modules"}
+    DENY_GLOBS = ("*_token*", "*_secret*", "*_key*", "*_credential*", "*.bin")
+
+    def __init__(self, root: str) -> None:
+        self.root = pathlib.Path(root).resolve()
+        self._q: Dict[int, Proposal] = {}
+        self._n = 0
+
+    def _resolve(self, path: str) -> pathlib.Path:
+        p = (self.root / path).resolve()
+        if p != self.root and self.root not in p.parents:
+            raise ValueError(f"outside scope: {path}")
+        if any(part in self.DENY_PARTS for part in p.parts):
+            raise ValueError(f"denied path: {path}")
+        if any(fnmatch.fnmatch(p.name, g) for g in self.DENY_GLOBS):
+            raise ValueError(f"denied name: {p.name}")
+        if p.suffix not in self.ALLOW_EXT:
+            raise ValueError(f"file type not permitted: {p.suffix or '(none)'}")
+        return p
+
+    def rel(self, p: pathlib.Path) -> str:
+        return str(p.relative_to(self.root))
+
+    def read(self, path: str) -> str:
+        return self._resolve(path).read_text()
+
+    def propose(self, face: str, path: str, new_text: str,
+                reason: str) -> Proposal:
+        p = self._resolve(path)
+        old = p.read_text() if p.exists() else ""
+        diff = "".join(difflib.unified_diff(
+            old.splitlines(True), new_text.splitlines(True),
+            fromfile=f"a/{self.rel(p)}", tofile=f"b/{self.rel(p)}"))
+        if not diff:
+            raise ValueError("no change")
+        self._n += 1
+        pr = Proposal(self._n, face, self.rel(p), reason, new_text, diff)
+        self._q[pr.pid] = pr
+        return pr
+
+    def pending(self) -> List[Proposal]:
+        return [pr for pr in self._q.values() if pr.status == "pending"]
+
+    def get(self, pid: int) -> Optional[Proposal]:
+        return self._q.get(pid)
+
+    def approve(self, pid: int, by: str = NAME) -> str:
+        pr = self._q.get(pid)
+        if not pr or pr.status != "pending":
+            return f"(no pending proposal #{pid})"
+        p = self._resolve(pr.path)
+        if p.exists():
+            bak = p.with_suffix(p.suffix + f".bak.{int(time.time())}")
+            bak.write_text(p.read_text())
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(pr.new_text)
+        pr.status, pr.note = "applied", f"by {by}"
+        a, d = pr.stat()
+        return f"applied #{pid} «{pr.face}» {pr.path}  (+{a} -{d})"
+
+    def reject(self, pid: int, why: str = "") -> str:
+        pr = self._q.get(pid)
+        if not pr or pr.status != "pending":
+            return f"(no pending proposal #{pid})"
+        pr.status, pr.note = "rejected", why or "rejected"
+        return f"rejected #{pid} «{pr.face}» {pr.path}"
+
+
+def _int(s: str, default: int = -1) -> int:
+    try:
+        return int(str(s).strip())
+    except (TypeError, ValueError):
+        return default
 
 
 def _coerce_reply(gen: Any) -> str:
@@ -397,6 +517,11 @@ class StitchBoard:
         self.support = SupportHarness(self.sink)
         self.active = ActiveHarness(self.monad)
         self._acked: set = set()          # (face, stamp, level) already routed
+        # faces may read/propose code within this root; writes are Ptolemy-gated
+        _root = os.environ.get(
+            "PTOLEMY_CODE_ROOT",
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.gate = CodeGate(_root)
 
     # -- routing --------------------------------------------------------------
     def route(self, msg: str) -> str:
@@ -429,6 +554,22 @@ class StitchBoard:
             arch = self.support.faces.get("Archimedes")
             out = arch.act(q) if arch else None
             return out or "(Archimedes unavailable)"
+        if m.startswith("/proposals"):
+            pend = self.gate.pending()
+            if not pend:
+                return "no pending code proposals"
+            return "pending code proposals:\n" + "\n".join(
+                f"  #{pr.pid} «{pr.face}» {pr.path}  (+{pr.stat()[0]} -{pr.stat()[1]})"
+                f"  — {pr.reason}" for pr in pend)
+        if m.startswith("/diff "):
+            pr = self.gate.get(_int(m.split(None, 1)[1]))
+            return pr.diff if pr else "(no such proposal)"
+        if m.startswith("/approve "):
+            return self.gate.approve(_int(m.split(None, 1)[1]))
+        if m.startswith("/reject "):
+            parts = m.split(None, 2)
+            return self.gate.reject(_int(parts[1]),
+                                    parts[2] if len(parts) > 2 else "")
         if m.startswith("/monad"):
             arg = m[6:].strip().lower()
             if arg in ("off", "detach", "0"):
@@ -506,7 +647,7 @@ class PtolemyConsole:
         self.registry = registry
         self.lines: List[str] = [
             f"{NAME} console — PtolemyDesktop Core.  Tab: ValaQuenta   "
-            f"/faces /poll /enc /radio /diag /tool   q: quit",
+            f"/faces /poll /enc /proposals /approve /radio /diag   q: quit",
             f"  {board.status_line()}", ""]
         self.input = ""
 
@@ -612,6 +753,34 @@ def selftest() -> int:
             print("    ", ln)
         for ln in b.review_faces():
             print("    ", ln)
+    # --- CodeGate: a face proposes, Ptolemy approves ---------------------
+    import shutil
+    import tempfile
+    d = tempfile.mkdtemp(prefix="ptol_gate_")
+    try:
+        src = pathlib.Path(d) / "two_objects.py"
+        src.write_text("def a(x):\n    return x + 1\n\n\ndef b(x):\n    return x * 2\n")
+        gate = CodeGate(d)
+        arch = b.support.faces["Archimedes"]
+        print(f"\n{NAME}> (Archimedes reads two_objects.py, proposes a fold)")
+        _ = arch.read_code(gate, "two_objects.py")
+        pr = arch.propose(gate, "two_objects.py",
+                          "def ab(x):\n    return (x + 1) * 2\n",
+                          "minimise: fold a,b into one object")
+        print(f"     proposal #{pr.pid} «{pr.face}» {pr.path}  (+{pr.stat()[0]} -{pr.stat()[1]})")
+        print("    ", gate.reject(999).strip(), "(guard: bad id)")
+        print("    ", gate.approve(pr.pid).strip())
+        print("     file now:", src.read_text().replace(chr(10), " ⏎ ").strip())
+        baks = list(pathlib.Path(d).glob("*.bak.*"))
+        print("     backup made:", bool(baks))
+        # deny check
+        try:
+            gate.read("../etc_shadow_token.bin")
+        except ValueError as e:
+            print("     deny works:", e)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
     reg = _load_registry()
     print("\nValaQuenta registry:", (f"{len(reg.list_modules())} engines" if reg else "unavailable"))
     print("\nselftest OK")
