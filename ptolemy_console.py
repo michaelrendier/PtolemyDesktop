@@ -21,8 +21,21 @@ PGui side connects over a pty and imports it.
     routes between them.  One object holds information (monad), display
     (console sink) and diagnostics (support) — one monolithic calculation.
 
+Two tabs:
+    THE CHAT TAB       — this window: Ptolemy + the faces + the monad.
+    THE VALAQUENTA TAB — the DerivationBrowser.  ARCHIMEDES runs it (guided
+                         tour / mathematical encyclopedia / supercalculator).
+                         Full stop.
+
+The console runs its OWN tabs when standalone.  Installed in PtolemyDesktop it
+is HIBERNATED — `--port` mode, no curses — and the desktop renders the tabs,
+driving the console over the pty.  Archimedes' `run_tab(scr)` is the
+standalone form; `act()` (three modes) is the hibernated form the desktop
+calls.
+
 Run:
-    python3 ptolemy_console.py            # the curses app
+    python3 ptolemy_console.py            # standalone curses app (both tabs)
+    python3 ptolemy_console.py --port     # hibernated: frame protocol, no curses
     python3 ptolemy_console.py --selftest # headless: route a few turns, print
 
 Runs under PtolemyDesktop/.venv (layered on ValaQuenta/.venv).  All cross-repo
@@ -99,6 +112,7 @@ class Face:
                  intrusion_of: Optional[Callable[[float], str]] = None,
                  opinion: Optional[Callable[[str], Tuple[str, float]]] = None,
                  act: Optional[Callable[[str], str]] = None,
+                 tab: Optional[Callable[[Any], None]] = None,
                  active: bool = False) -> None:
         self.name = name
         self.role = role or FACE_ROLES.get(name, "(registered)")
@@ -107,8 +121,18 @@ class Face:
         self._intrusion_of = intrusion_of or (lambda d: "drift")
         self._opinion = opinion
         self._act = act
+        self._tab = tab                    # this face runs a full-screen tab
         self.active = active
         self.last_drift = 0.0
+
+    @property
+    def runs_tab(self) -> bool:
+        return self._tab is not None
+
+    def run_tab(self, scr: Any) -> None:
+        if self._tab is None:
+            raise RuntimeError(f"{self.name} has no tab")
+        self._tab(scr)
 
     def report(self, threshold: float) -> FacePost:
         try:
@@ -327,8 +351,10 @@ class SupportHarness:
     THRESHOLD = 0.25
     PERIOD = 8.0
 
-    def __init__(self, sink: "queue.Queue[str]") -> None:
+    def __init__(self, sink: "queue.Queue[str]",
+                 registry_getter: Optional[Callable[[], Any]] = None) -> None:
         self._sink = sink
+        self._get_reg = registry_getter or (lambda: None)
         self.faces: Dict[str, Face] = {}
         self.latest: Dict[str, FacePost] = {}
         self._run = False
@@ -355,10 +381,15 @@ class SupportHarness:
                            adjust=lambda: "narrowed the tool surface to the vetted catalogue",
                            intrusion_of=lambda d: "tool",
                            opinion=self._phaleron_opinion))
-        # Archimedes — the Encyclopedia: the one active face.
+        # Archimedes — the Encyclopedia: the one active face; RUNS the
+        # ValaQuenta Tab (guided tour / mathematical encyclopedia /
+        # supercalculator).  Standalone -> run_tab draws the DerivationBrowser;
+        # hibernated (console installed in the desktop) -> act() answers the
+        # same three modes as text/frames and the desktop renders the tab.
         self.add_face(Face("Archimedes", probe=lambda: 0.0,
                            opinion=self._archimedes_opinion,
-                           act=self._archimedes_act, active=True))
+                           act=self._archimedes_act,
+                           tab=self._archimedes_tab, active=True))
 
     def _aule_probe(self) -> float:
         d = 0.0
@@ -404,14 +435,108 @@ class SupportHarness:
     def _archimedes_opinion(self, topic: str) -> Tuple[str, float]:
         t = topic.lower()
         if any(w in t for w in ("math", "maths", "physics", "prove", "derive",
-                                "equation", "why", "theorem")):
+                                "equation", "why", "theorem", "engine", "proof")):
             return ("this is reference — I can speak to it", 0.9)
         return ("not a reference question", 0.3)
 
-    @staticmethod
-    def _archimedes_act(request: str) -> str:
-        return (f"Archimedes: (maths/physics .bin not loaded) — noted '{request[:80]}'. "
-                f"Load the domain corpus for a real answer.")
+    # ── Archimedes runs the ValaQuenta Tab ─────────────────────────────────
+    def _archimedes_find(self, reg, ql: str):
+        """(engine, equation | None) referenced in the query, or (None, None)."""
+        for name in reg.list_modules():
+            if name in ql or name.replace("_", " ") in ql:
+                for full in reg.list_equations(name):
+                    en = full.split(".", 1)[1]
+                    if en in ql:
+                        return name, en
+                return name, None
+        return None, None
+
+    def _archimedes_act(self, request: str) -> str:
+        """Text form of the ValaQuenta Tab — three modes:
+        supercalculator (run/compute), guided tour (prove/derive/how),
+        encyclopedia (default).  Used standalone for `/enc` and by the desktop
+        when the console is hibernated."""
+        reg = self._get_reg()
+        if reg is None:
+            return "Archimedes: no ValaQuenta registry loaded."
+        q = request.strip()
+        ql = q.lower()
+        engine, eq = self._archimedes_find(reg, ql)
+        mode = ("calc" if any(w in ql for w in ("run ", "compute", "calc", "="))
+                else "tour" if any(w in ql for w in ("prove", "derive", "tour",
+                                                     "guide", " how ", "steps",
+                                                     "proof"))
+                else "enc")
+
+        if engine is None:
+            hits = [n for n in reg.list_modules()
+                    if any(w and w in n for w in ql.split())]
+            if hits:
+                return "Archimedes: which engine — " + ", ".join(hits[:12])
+            return (f"Archimedes catalogues {len(reg.list_modules())} engines; "
+                    f"none matched '{q[:50]}'. Name one, or Tab into the "
+                    f"ValaQuenta Tab.")
+
+        mod = reg.get_module(engine)
+
+        if mode == "calc":
+            if eq is None:
+                eqs = [e.split(".", 1)[1] for e in reg.list_equations(engine)]
+                return (f"Archimedes ▸ {mod.display_name}: name the equation — "
+                        + ", ".join(eqs[:14]))
+            try:
+                r = reg.run(f"{engine}.{eq}", {})
+                val = r.get("result", r) if isinstance(r, dict) else r
+                return (f"Archimedes ▸ supercalculator  {engine}.{eq} =\n"
+                        f"  {str(val)[:600]}")
+            except Exception as e:                                # noqa: BLE001
+                return (f"Archimedes ▸ {engine}.{eq}: needs parameters / did "
+                        f"not run — {type(e).__name__}: {e}")
+
+        if mode == "tour":
+            try:
+                from ValaQuenta.engine.proof_locale import (          # noqa: PLC0415
+                    render_guided, proof_catalog)
+                if proof_catalog(engine):
+                    return "Archimedes ▸ guided tour\n" + render_guided(engine, eq)
+            except Exception:                                     # noqa: BLE001
+                pass
+            return (f"Archimedes ▸ {mod.display_name}: no proof_locale catalog "
+                    f"yet — Tab into the ValaQuenta Tab, key p, for the "
+                    f"declaration of {eq or 'any equation'}.")
+
+        # encyclopedia
+        out = [f"Archimedes ▸ {mod.display_name}  v{mod.version}",
+               f"  {mod.process_description}"]
+        try:
+            from ValaQuenta.engine import manifest as _mf              # noqa: PLC0415
+            man = _mf.load(engine) or _mf.scaffold(engine, mod)
+            p = man.get("provenance", {})
+            if p.get("status_label"):
+                out.append(f"  status : {p['status_label']}")
+            if p.get("origin"):
+                out.append(f"  origin : {p['origin'][:220]}")
+            w = p.get("wiki", {})
+            if w.get("valaquenta"):
+                out.append(f"  wiki   : {w['valaquenta']}")
+            cs = man.get("environment", {}).get("constants", [])
+            if cs:
+                out.append("  consts : "
+                           + ", ".join(c.get("symbol", "?") for c in cs))
+        except Exception:                                         # noqa: BLE001
+            pass
+        out.append(f"  {len(reg.list_equations(engine))} equations — "
+                   f"'/enc run {engine}.<eq>' to compute, '/enc tour {engine}' "
+                   f"for the walk, or Tab for the full tab.")
+        return "\n".join(out)
+
+    def _archimedes_tab(self, scr: Any) -> None:
+        """Standalone (curses) form of the ValaQuenta Tab — the DerivationBrowser."""
+        reg = self._get_reg()
+        if reg is None:
+            raise RuntimeError("no ValaQuenta registry")
+        from ValaQuenta.engine.console_curses import DerivationBrowser  # noqa: PLC0415
+        DerivationBrowser(scr, reg).run()
 
     # ── registry ───────────────────────────────────────────────────────────
     def add_face(self, face: Face) -> None:
@@ -514,7 +639,11 @@ class StitchBoard:
     def __init__(self) -> None:
         self.sink: "queue.Queue[str]" = queue.Queue()
         self.monad = MonadLink()
-        self.support = SupportHarness(self.sink)
+        self._registry = None
+        self._registry_loaded = False
+        # Archimedes (in the support room) runs the ValaQuenta Tab, so the
+        # support harness gets a lazy handle to the registry.
+        self.support = SupportHarness(self.sink, self._get_registry)
         self.active = ActiveHarness(self.monad)
         self._acked: set = set()          # (face, stamp, level) already routed
         # faces may read/propose code within this root; writes are Ptolemy-gated
@@ -522,6 +651,22 @@ class StitchBoard:
             "PTOLEMY_CODE_ROOT",
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.gate = CodeGate(_root)
+
+    def _get_registry(self):
+        if not self._registry_loaded:
+            # ValaQuenta's registry prints on register(); in --port mode stdout
+            # IS the frame pipe, so keep it quiet.
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                self._registry = _load_registry()
+            self._registry_loaded = True
+        return self._registry
+
+    @property
+    def registry(self):
+        return self._get_registry()
 
     # -- routing --------------------------------------------------------------
     def route(self, msg: str) -> str:
@@ -646,7 +791,8 @@ class PtolemyConsole:
         self.board = board
         self.registry = registry
         self.lines: List[str] = [
-            f"{NAME} console — PtolemyDesktop Core.  Tab: ValaQuenta   "
+            f"{NAME} console — PtolemyDesktop Core.  "
+            f"Tab: the ValaQuenta Tab (Archimedes)   "
             f"/faces /poll /enc /proposals /approve /radio /diag   q: quit",
             f"  {board.status_line()}", ""]
         self.input = ""
@@ -706,20 +852,21 @@ class PtolemyConsole:
             self._push(f"  {reply}")
 
     def _derivation_subloop(self) -> None:
-        if self.registry is None:
-            self._push("(no ValaQuenta registry — derivation UI unavailable)")
+        """Tab into the ValaQuenta Tab.  Archimedes runs it."""
+        arch = self.board.support.faces.get("Archimedes")
+        if arch is None or not arch.runs_tab:
+            self._push("(Archimedes has no ValaQuenta Tab)")
             return
         try:
-            from ValaQuenta.engine.console_curses import DerivationBrowser  # noqa: PLC0415
             self.scr.nodelay(False)
             curses.curs_set(0)
-            DerivationBrowser(self.scr, self.registry).run()
+            arch.run_tab(self.scr)
         except Exception as e:                                    # noqa: BLE001
-            self._push(f"(derivation UI error: {type(e).__name__}: {e})")
+            self._push(f"(ValaQuenta Tab error: {type(e).__name__}: {e})")
         finally:
             self.scr.nodelay(True)
             curses.curs_set(1)
-            self._push("(back from derivation UI)")
+            self._push("(back from the ValaQuenta Tab — Archimedes)")
 
     def _draw(self) -> None:
         self.scr.erase()
@@ -746,7 +893,8 @@ def selftest() -> int:
     print("faces:", ", ".join(b.support.faces))
     b.support.register("demo_face", lambda: 0.4, lambda: "throttled demo_face ingest")
     for msg in ("hello ptolemy", "/faces", "/radio", "/poll open the tool file",
-                "/enc why is sigma one half", "/diag"):
+                "/enc emerger", "/enc run emerger.verify",
+                "/enc tour emerger", "/diag"):
         print(f"\n{NAME}> {msg}")
         print("  ->", b.route(msg))
         for ln in b.drain():
@@ -781,7 +929,7 @@ def selftest() -> int:
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
-    reg = _load_registry()
+    reg = b.registry            # already loaded once by Archimedes above
     print("\nValaQuenta registry:", (f"{len(reg.list_modules())} engines" if reg else "unavailable"))
     print("\nselftest OK")
     return 0
@@ -842,10 +990,9 @@ def main() -> int:
     if args.selftest:
         return selftest()
     if args.port:
-        return run_port()
+        return run_port()          # hibernated: no curses; the desktop renders the tabs
     board = StitchBoard()
-    registry = _load_registry()
-    curses.wrapper(lambda scr: PtolemyConsole(scr, board, registry).run())
+    curses.wrapper(lambda scr: PtolemyConsole(scr, board, board.registry).run())
     return 0
 
 
