@@ -131,6 +131,7 @@ class ConsoleClient:
         self._q: "_q.Queue[Dict[str, Any]]" = _q.Queue()
         self._reader: Optional[threading.Thread] = None
         self._run = False
+        self._id = 0
 
     def attach(self) -> "ConsoleClient":
         import termios
@@ -167,11 +168,23 @@ class ConsoleClient:
         assert self._port
         self._port.send(frame)
 
-    def _await(self, kind: str, timeout: float = 15.0) -> Optional[Dict[str, Any]]:
-        """Wait for a frame of type `kind` (or `error`).  Frames that arrive
-        while waiting but don't match — radio / status / derive — are put back
-        on the queue for `.events()`, so diagnostics are never swallowed by an
-        RPC."""
+    def _rpc(self, frame: Dict[str, Any], kind: str,
+             timeout: float = 15.0) -> Optional[Dict[str, Any]]:
+        """Send a request tagged with a fresh id and wait for the matching
+        reply.  Response correlation is by id: a stale reply to an earlier
+        request whose _await gave up can never be mistaken for this one."""
+        self._id += 1
+        rid = self._id
+        frame = {**frame, "id": rid}
+        self.send(frame)
+        return self._await(kind, timeout=timeout, rid=rid)
+
+    def _await(self, kind: str, timeout: float = 15.0,
+               rid: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Wait for a frame of type `kind` (or `error`), optionally matching
+        `id == rid`.  Non-matching frames that arrive while waiting — radio /
+        status / derive, or replies to other requests — are put back on the
+        queue, so nothing is swallowed by an RPC."""
         deadline = time.time() + timeout
         held: List[Dict[str, Any]] = []
         hit: Optional[Dict[str, Any]] = None
@@ -180,7 +193,9 @@ class ConsoleClient:
                 f = self._q.get(timeout=max(0.0, deadline - time.time()))
             except Exception:                                    # noqa: BLE001
                 break
-            if f.get("t") in (kind, "error"):
+            match_kind = f.get("t") in (kind, "error")
+            match_id = rid is None or f.get("id") in (None, rid)
+            if match_kind and match_id:
                 hit = f
                 break
             held.append(f)
@@ -198,20 +213,21 @@ class ConsoleClient:
                 return out
 
     def say(self, text: str) -> str:
-        self.send({"t": "say", "text": text})
-        f = self._await("chat")
+        f = self._rpc({"t": "say", "text": text}, "chat")
         return (f or {}).get("text", "(no reply)")
 
     def command(self, line: str) -> str:
-        self.send({"t": "cmd", "line": line})
-        f = self._await("chat")
+        f = self._rpc({"t": "cmd", "line": line}, "chat")
         return (f or {}).get("text", "(no reply)")
 
     def feed_pyqt6(self, path: str) -> Dict[str, Any]:
         """Hand a PyQt5/PyQt6 face to the console's update session."""
-        self.send({"t": "update", "kind": "pyqt6", "path": os.path.abspath(path)})
-        return self._await("update.result") or {
+        return self._rpc({"t": "update", "kind": "pyqt6",
+                          "path": os.path.abspath(path)}, "update.result") or {
             "t": "update.result", "ok": False, "error": "no result frame"}
+
+    def ping(self, timeout: float = 2.0) -> bool:
+        return self._rpc({"t": "ping"}, "pong", timeout=timeout) is not None
 
     def close(self) -> None:
         self._run = False
@@ -234,6 +250,112 @@ class ConsoleClient:
         if self._reader is not None:
             self._reader.join(timeout=1.0)
         self._port = None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  desktop side  (the compositor talks to the console THROUGH this)
+# ══════════════════════════════════════════════════════════════════════════════
+class PtolemyDesktopBridge:
+    """The PtolemyDesktop end of the standardized connection.
+
+    "PtolemyDesktop will import my console with or without the monad, but the
+    harness is the connection to the Desktop Compositor."  This object IS that
+    connection.  It carries:
+
+      * the console channel  — an embedded ConsoleClient over a pty; say() /
+        command() / feed_pyqt6() / status().  `pump()` (call it on a Qt
+        QTimer) drains radio / status / derive frames and hands them to the
+        on_radio / on_status / on_derive callbacks so the faces get their
+        voice in the compositor.
+      * the compositor hooks the desktop already calls on its `ptolemy`
+        object — openFace / openShell / openSettings / close — wired to the
+        callbacks the desktop passes in.  Absent a wiring they no-op, so the
+        desktop degrades cleanly ("with or without the monad").
+
+    Pass an instance straight in as  ProcessGraph(scene, ptolemy=bridge)."""
+
+    def __init__(self, *, python: Optional[str] = None, with_monad: bool = True,
+                 open_face=None, open_shell=None, open_settings=None,
+                 on_radio=None, on_status=None, on_derive=None) -> None:
+        self.python = python
+        self.with_monad = with_monad
+        self._open_face = open_face
+        self._open_shell = open_shell
+        self._open_settings = open_settings
+        self.on_radio = on_radio or (lambda line: None)
+        self.on_status = on_status or (lambda frame: None)
+        self.on_derive = on_derive or (lambda frame: None)
+        self._client: Optional[ConsoleClient] = None
+        self.last_status: Dict[str, Any] = {}
+
+    # ── console channel ──────────────────────────────────────────────────────
+    def attach(self) -> "PtolemyDesktopBridge":
+        self._client = ConsoleClient(python=self.python).attach()
+        if not self.with_monad:
+            # detach the speaking monad; the harness / stitchboard stay live
+            self._client.command("/monad off")
+        return self
+
+    @property
+    def attached(self) -> bool:
+        return self._client is not None
+
+    def say(self, text: str) -> str:
+        return self._client.say(text) if self._client else "(no console)"
+
+    def command(self, line: str) -> str:
+        return self._client.command(line) if self._client else "(no console)"
+
+    def feed_pyqt6(self, path: str) -> Dict[str, Any]:
+        """Hot-load new PyQt6 face code — runs an update session in the console
+        and returns the update.result frame (pgui shims added, menu extracted,
+        face registered with the active harness)."""
+        if not self._client:
+            return {"t": "update.result", "ok": False, "error": "no console"}
+        return self._client.feed_pyqt6(path)
+
+    def pump(self) -> None:
+        """Drain queued frames.  Call on a QTimer (~250 ms)."""
+        if not self._client:
+            return
+        for f in self._client.events():
+            t = f.get("t")
+            if t == "radio":
+                self.on_radio(f.get("line", ""))
+            elif t == "status":
+                self.last_status = f
+                self.on_status(f)
+            elif t == "derive":
+                self.on_derive(f)
+
+    def alive(self) -> bool:
+        return bool(self._client and self._client.ping())
+
+    def status(self) -> Dict[str, Any]:
+        """Most recent status frame (refresh by triggering one)."""
+        if self._client:
+            self._client.send({"t": "attach", "who": "bridge-refresh"})
+            time.sleep(0.15)
+            self.pump()
+        return self.last_status
+
+    # ── compositor hooks (the desktop's `ptolemy` surface) ───────────────────
+    def openFace(self, face_id) -> None:
+        if self._open_face:
+            self._open_face(face_id)
+
+    def openShell(self) -> None:
+        if self._open_shell:
+            self._open_shell()
+
+    def openSettings(self, section: Optional[str] = None) -> None:
+        if self._open_settings:
+            self._open_settings(section)
+
+    def close(self) -> None:
+        if self._client:
+            self._client.close()
+            self._client = None
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -71,6 +71,7 @@ class MonadLink:
     def __init__(self) -> None:
         self.kind = "stand-in"
         self._engine = None
+        self.enabled = True
         try:
             from VAPMIP.monad import Engine                       # noqa: PLC0415
             self._engine = Engine()
@@ -79,6 +80,8 @@ class MonadLink:
             self._why = f"{type(e).__name__}: {e}"
 
     def say(self, text: str) -> Tuple[str, Dict[str, Any]]:
+        if not self.enabled:
+            return ("(monad detached — harness only)", {"via": "detached"})
         if self._engine is not None:
             try:
                 gen = self._engine.generate(text)
@@ -294,6 +297,15 @@ class StitchBoard:
             return self.active.present(m[6:], kind="tool-request")
         if m.startswith("/diag"):
             return f"support: {self.support.status()}   active: {self.active.status()}"
+        if m.startswith("/monad"):
+            arg = m[6:].strip().lower()
+            if arg in ("off", "detach", "0"):
+                self.monad.enabled = False
+                return "(monad detached — harness + stitchboard stay live)"
+            if arg in ("on", "attach", "1"):
+                self.monad.enabled = True
+                return "(monad attached)"
+            return f"(monad {'attached' if self.monad.enabled else 'detached'})"
         reply, meta = self.monad.say(m)
         return reply
 
@@ -456,19 +468,20 @@ def run_port() -> int:
             if f is None:
                 continue
             t = f.get("t")
+            rid = f.get("id")
             if t in ("attach", "noop"):
                 port.send({"t": "status", **_status_dict(board)})
             elif t == "ping":
-                port.send({"t": "pong", "at": time.time()})
+                port.send({"t": "pong", "at": time.time(), "id": rid})
             elif t == "say":
-                port.send({"t": "chat", "who": NAME,
+                port.send({"t": "chat", "who": NAME, "id": rid,
                            "text": board.route(f.get("text", ""))})
             elif t == "cmd":
-                port.send({"t": "chat", "who": NAME,
+                port.send({"t": "chat", "who": NAME, "id": rid,
                            "text": board.route(f.get("line", ""))})
             elif t == "update":
                 res = run_update_session(f.get("path", ""), board.active._h)
-                port.send(res)
+                port.send({**res, "id": rid})
             elif t == "quit":
                 break
     finally:
