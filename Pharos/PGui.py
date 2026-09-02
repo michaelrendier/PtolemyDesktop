@@ -695,6 +695,9 @@ class PWindow(QGraphicsItem):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# --- QtWidgets auto-added by update sessions ---
+from PyQt6.QtWidgets import QCheckBox, QGridLayout, QInputDialog
+
 #  PASSTHROUGH ALIASES — standalone mode (PHAROS_MODE = 0)
 #  In Pharos mode these are replaced below with P-native classes.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -710,6 +713,9 @@ PDockWidget  = QDockWidget
 PTextEdit    = QTextEdit
 PListWidget  = QListWidget
 PTableWidget = QTableWidget
+PInputDialog = QInputDialog   # auto-added by an update session
+PGridLayout  = QGridLayout   # auto-added by an update session
+PCheckBox    = QCheckBox   # auto-added by an update session
 
 
 # ══════════════════════════════════════════════════════════════════════════════

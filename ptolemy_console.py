@@ -438,12 +438,59 @@ def selftest() -> int:
     return 0
 
 
+def run_port() -> int:
+    """Frame-protocol mode: drive the StitchBoard behind console_link's
+    standardized connection (stdio here; a pty when spawned by ConsoleClient).
+    This is how PtolemyDesktop attaches — and how new PyQt6 code is fed in for
+    an update session."""
+    from console_link import ConsolePort, run_update_session      # noqa: PLC0415
+    port = ConsolePort.stdio()
+    board = StitchBoard()
+    board.support.start()
+    port.send({"t": "status", **_status_dict(board)})
+    try:
+        while True:
+            f = port.recv(timeout=1.0)
+            for ln in board.drain():
+                port.send({"t": "radio", "line": ln})
+            if f is None:
+                continue
+            t = f.get("t")
+            if t in ("attach", "noop"):
+                port.send({"t": "status", **_status_dict(board)})
+            elif t == "ping":
+                port.send({"t": "pong", "at": time.time()})
+            elif t == "say":
+                port.send({"t": "chat", "who": NAME,
+                           "text": board.route(f.get("text", ""))})
+            elif t == "cmd":
+                port.send({"t": "chat", "who": NAME,
+                           "text": board.route(f.get("line", ""))})
+            elif t == "update":
+                res = run_update_session(f.get("path", ""), board.active._h)
+                port.send(res)
+            elif t == "quit":
+                break
+    finally:
+        board.support.stop()
+    return 0
+
+
+def _status_dict(board: "StitchBoard") -> Dict[str, Any]:
+    return {"monad": board.monad.status(), "active": board.active.status(),
+            "support": board.support.status()}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="PtolemyDesktop Core — chat + derivation console")
     ap.add_argument("--selftest", action="store_true", help="headless smoke, no curses")
+    ap.add_argument("--port", action="store_true",
+                    help="frame-protocol mode (console_link) — no curses")
     args = ap.parse_args()
     if args.selftest:
         return selftest()
+    if args.port:
+        return run_port()
     board = StitchBoard()
     registry = _load_registry()
     curses.wrapper(lambda scr: PtolemyConsole(scr, board, registry).run())

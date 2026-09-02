@@ -1,0 +1,20 @@
+# Auto-extracted from CommandInput_qt
+
+# Command
+initUI | 
+vkeys | 
+boundingRect | 
+cornerEvent | 
+keyPressEvent | 
+mousePressEvent | 
+mouseDoubleClickEvent | 
+enterEvent | 
+cmdProcess | 
+speak | 
+setOutput | 
+saveLog | 
+pyIn | 
+shIn | 
+PtolIn | 
+outLog | 
+---

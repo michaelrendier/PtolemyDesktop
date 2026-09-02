@@ -1,0 +1,31 @@
+# Auto-extracted from APISniffCL
+
+# CodeBrowser
+initUI | 
+debug | 
+dPrint | 
+importPkg | 
+searchList | 
+addItems | 
+repopList | 
+listsEntry | 
+typeSort | 
+itemSelect | 
+getText | 
+typeModule | 
+typeClass | 
+typePyqtWrapper | 
+typeFunction | 
+typeBuiltin | 
+typeInstanceMethod | 
+typeCollection | 
+typePrivate | 
+typePrevious | 
+typeUnknown | 
+typeType | 
+setText | 
+insertImage | Insert a gradient header bar + a type icon into the text pane.
+split | Chunk a list into sublists of *size*.
+setCurrent | 
+eventFilter | 
+---
