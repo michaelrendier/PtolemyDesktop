@@ -150,8 +150,12 @@ class SupportHarness:
             def aule_bus_probe() -> float:
                 # a stalled event bus (no recent events) is not itself a fault;
                 # report it flat unless status_summary flags trouble.
+                import contextlib
+                import io
                 try:
-                    s = _aule.status_summary()
+                    with contextlib.redirect_stdout(io.StringIO()), \
+                         contextlib.redirect_stderr(io.StringIO()):
+                        s = _aule.status_summary()
                     if isinstance(s, dict):
                         return float(s.get("drift", s.get("worst", 0.0)) or 0.0)
                 except Exception:                                 # noqa: BLE001
