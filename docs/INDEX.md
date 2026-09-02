@@ -24,6 +24,7 @@
 
 | Document | Description |
 |---|---|
+| [../T_Man/README.md](../T_Man/README.md) | **The Manual (T_Man)** — one operational page per build. Every new build gets one. |
 | [../README.md](../README.md) | Project overview, Face table, LSH model, LuthSpell, error catalog |
 | [../INSTALL.md](../INSTALL.md) | Installation — dependencies, QTermWidget build, venv setup |
 | [../SERVER_SPEC.md](../SERVER_SPEC.md) | Server architecture specification |
