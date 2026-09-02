@@ -153,3 +153,7 @@ PtolC/ptolemy
 
 # Ptolemy3 venv (reproduce with ./Ptolemy3_venv.sh)
 .venv/
+
+# Simon Singh "The Code Book" CD-ROM — reference material from the author's
+# personal website, kept local for the pycrypt.py port (not ours to redistribute)
+Kryptos/TheCodeBook/cdrom/
