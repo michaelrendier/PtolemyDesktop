@@ -100,6 +100,31 @@ class FacePost:
         return f"« {self.who} »{mark}{tag} {self.text}"
 
 
+# ── Ptolemy's judgement on a support-harness report ──────────────────────────
+#  Every un-acked warn / hardening post from the support room gets a judgement:
+#  Ptolemy weighs the post's drift, its level, and the other faces' opinions,
+#  reaches one decision from a fixed vocabulary, and posts a structured line
+#  back into the Chat Tab.  That line follows JUDGEMENT_GRAMMAR verbatim so the
+#  SUPPORT HARNESS can ingest Ptolemy's response in turn (a later build).
+JUDGEMENT_GRAMMAR = ("« Ptolemy » judgement [<face>/<intrusion>]: <reason> "
+                     "-> decision: <DECISION>  action: <action>")
+DECISIONS = ("HOLD", "THROTTLE", "HARDEN", "ESCALATE", "DEFER")
+
+
+@dataclass
+class Judgement:
+    face: str
+    intrusion: str
+    decision: str            # one of DECISIONS
+    action: str
+    reason: str
+    stamp: str = field(default_factory=lambda: time.strftime("%H:%M:%S"))
+
+    def line(self) -> str:
+        return (f"« {NAME.capitalize()} » judgement [{self.face}/{self.intrusion}]: "
+                f"{self.reason} -> decision: {self.decision}  action: {self.action}")
+
+
 class Face:
     """A chat-room identity.  `probe()` -> drift in [0,1]; past the harness
     threshold the face posts a HARDENING line whose adjustment is classified by
@@ -646,6 +671,7 @@ class StitchBoard:
         self.support = SupportHarness(self.sink, self._get_registry)
         self.active = ActiveHarness(self.monad)
         self._acked: set = set()          # (face, stamp, level) already routed
+        self._judgements: List[Judgement] = []   # Ptolemy's decisions, in order
         # faces may read/propose code within this root; writes are Ptolemy-gated
         _root = os.environ.get(
             "PTOLEMY_CODE_ROOT",
@@ -740,11 +766,47 @@ class StitchBoard:
         return self._drain_support()
 
     # -- Ptolemy reviewing / polling the support room -----------------------
-    def review_faces(self) -> List[str]:
-        """Ptolemy looks at the latest face posts; for a warn / hardening post
-        not yet acknowledged he routes it through the active harness and
-        records a one-line ack.  Passive posts he leaves for the Chat Tab."""
-        acks: List[str] = []
+    def _decide(self, post: FacePost,
+                opinions: List[Tuple[str, str, float]]) -> Tuple[str, str, str]:
+        """Deterministic: (decision, action, reason) from the post's level, its
+        drift weight, its intrusion kind, and the strongest concurring opinion
+        from the OTHER faces."""
+        lvl, w, intr = post.level, float(post.weight), (post.intrusion or "")
+        others = [(n, s, wt) for (n, s, wt) in opinions if n != post.who]
+        concur = max((wt for _, _, wt in others), default=0.0)
+        cname = next((n for n, _, wt in others if wt == concur), "")
+
+        if intr == "heartbeat" and lvl == "hardening":
+            return ("ESCALATE", "raise supervisor priority",
+                    f"heartbeat hardening from {post.who} — supervisor priority "
+                    f"regardless of drift {w:.2f}")
+        if intr == "tool" or any(k in post.text.lower() for k in
+                                 ("maths", "derive", "proof", "equation", "theorem")):
+            return ("DEFER", "route to Archimedes (reference)",
+                    f"{intr or 'reference'} question — Archimedes' jurisdiction")
+        if lvl == "hardening":
+            if w >= 0.60:
+                tail = f"; {cname} concurs {concur:.2f}" if concur >= 0.50 else ""
+                return ("HARDEN", "apply the proposed adjustment",
+                        f"drift {w:.2f} >= 0.60, hardening from {post.who}{tail}")
+            return ("THROTTLE", "route the adjustment as a request, not applied",
+                    f"drift {w:.2f} < 0.60 — throttle, do not auto-apply")
+        if lvl == "warn":
+            if w >= 0.40 and concur >= 0.50:
+                return ("THROTTLE", "route the adjustment as a request",
+                        f"warn drift {w:.2f}; {cname} concurs {concur:.2f}")
+            if w >= 0.40:
+                return ("ESCALATE", "cross-check on the next poll",
+                        f"warn drift {w:.2f}, no concurrence ({concur:.2f}) — watch")
+            return ("HOLD", "note only", f"warn drift {w:.2f} < 0.40 — hold")
+        return ("HOLD", "note only", "info-level — nothing to decide")
+
+    def judge_support(self) -> List[str]:
+        """Ptolemy's judgement pass over the support room.  For each un-acked
+        warn / hardening post: weigh it, poll the other faces, decide, act, and
+        emit one JUDGEMENT_GRAMMAR line (which the support harness ingests, a
+        later build).  Passive posts are left for the Chat Tab."""
+        lines: List[str] = []
         for name, post in list(self.support.latest.items()):
             if post.level == "info":
                 continue
@@ -752,11 +814,29 @@ class StitchBoard:
             if key in self._acked:
                 continue
             self._acked.add(key)
-            routed = self.active.present(
-                f"{name}: {post.text}", kind=f"face-{post.level}")
-            acks.append(f"{NAME}: ack «{name}» [{post.intrusion or post.level}] "
-                        f"→ {str(routed)[:80]}")
-        return acks
+            opinions = self.support.opinions(post.intrusion or post.text)
+            decision, action, reason = self._decide(post, opinions)
+            if decision == "HARDEN":
+                self.active.present(f"{name}: {post.text}", kind="face-hardening")
+            elif decision == "THROTTLE":
+                self.active.present(f"{name}: {post.text}",
+                                    kind="face-throttle-request")
+            elif decision == "DEFER":
+                arch = self.support.faces.get("Archimedes")
+                if arch is not None:
+                    try:
+                        arch.act(post.text)
+                    except Exception:                            # noqa: BLE001
+                        pass
+            j = Judgement(face=name, intrusion=post.intrusion or post.level,
+                          decision=decision, action=action, reason=reason,
+                          stamp=post.stamp)
+            self._judgements.append(j)
+            lines.append(j.line())
+        return lines
+
+    # kept name — the console / --port loop call this
+    review_faces = judge_support
 
     def poll_opinions(self, topic: str) -> str:
         rows = self.support.opinions(topic)
