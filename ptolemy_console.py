@@ -372,7 +372,11 @@ class MonadLink:
 # ══════════════════════════════════════════════════════════════════════════════
 class HarnessLink:
     def __init__(self, fd: int) -> None:
-        self._f = os.fdopen(fd, "r+", buffering=1, encoding="utf-8", newline="\n")
+        import socket                                            # noqa: PLC0415
+        # the fd is one end of ptol.c's AF_UNIX socketpair — not seekable, so
+        # wrap it as a socket and take a read/write text stream off it.
+        self._sock = socket.socket(fileno=fd)
+        self._f = self._sock.makefile("rw", encoding="utf-8", newline="\n")
         self._id = 0
         self._lock = threading.Lock()
 
@@ -441,14 +445,17 @@ class HarnessMonad:
 #  SUPPORT harness  (Tolkien / Diagnostic Support)
 # ══════════════════════════════════════════════════════════════════════════════
 class SupportHarness:
-    """The faces' room.  A periodic poll asks each face for a passive post; the
-    posts go to `sink` (the Chat Tab), attributed to the face.  `latest` keeps
-    the last post per face so Ptolemy can review and poll opinions.  Nothing
-    here acts — Ptolemy routes any action through the active harness, and only
-    Archimedes has an `act()` of its own."""
+    """The faces' room.  A slow periodic poll (PERIOD) checks each face; it only
+    posts to `sink` (the Chat Tab) when a face is DRIFTING or errored — a
+    nominal check-in says nothing.  `latest` still records every check so
+    Ptolemy can review and `/radio` can print the full roster on demand.
+    Nothing here acts — Ptolemy routes any action through the active harness,
+    and only Archimedes has an `act()` of its own.  (Cody, 2026-09-04: their
+    job is to report when drift starts, not to update the chat every few
+    seconds.)"""
 
     THRESHOLD = 0.25
-    PERIOD = 8.0
+    PERIOD = 3 * 60 * 60      # 3 hours — a drift watch, not a heartbeat
 
     def __init__(self, sink: "queue.Queue[str]",
                  registry_getter: Optional[Callable[[], Any]] = None) -> None:
@@ -651,13 +658,18 @@ class SupportHarness:
         self._portal_load = max(0.0, min(1.0, float(load)))
 
     # ── the poll ───────────────────────────────────────────────────────────
-    def radio_check(self) -> List[str]:
+    def radio_check(self, quiet: bool = False) -> List[str]:
+        """Check every face. `quiet=True` (the periodic poll) returns only the
+        faces that are DRIFTING or errored; `/radio` calls it plain and gets
+        the full nominal roster."""
         lines: List[str] = []
         for name, face in self.faces.items():
             post = face.report(self.THRESHOLD)
             self.latest[name] = post
+            if quiet and post.level == "info":       # nominal check-in — silent
+                continue
             lines.append(f"[{post.stamp}] {post.line()}")
-        if not self.faces:
+        if not self.faces and not quiet:
             lines.append(f"[{time.strftime('%H:%M:%S')}] no faces — support room empty")
         return lines
 
@@ -670,7 +682,7 @@ class SupportHarness:
 
     def _loop(self) -> None:
         while self._run:
-            for ln in self.radio_check():
+            for ln in self.radio_check(quiet=True):   # drift / errors only
                 self._sink.put(ln)
             for _ in range(int(self.PERIOD * 4)):
                 if not self._run:
