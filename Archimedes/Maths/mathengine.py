@@ -44,7 +44,9 @@ _KEEP = {
 }
 _FUNC_ONLY = {"sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh",
               "cosh", "tanh", "exp", "log", "ln", "sqrt", "cbrt", "Abs", "sign",
-              "factorial", "Integral", "Sum", "Product", "Limit", "Derivative",
+              "factorial", "binomial", "ceiling", "floor", "limit", "Limit",
+              "Matrix", "conjugate", "re", "im", "sinc",
+              "Integral", "Sum", "Product", "Derivative",
               "Rational", "Piecewise"}
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
 
@@ -73,11 +75,22 @@ def _parse(expr_str: str):
                        + (implicit_multiplication_application, convert_xor))
     s = expr_str.strip()
     ld = _local_dict(s)
+
+    def P(txt):
+        return sp.parse_expr(txt, transformations=_TRANSFORMS, local_dict=ld)
+
+    for tok, rel in ((">=", sp.Ge), ("<=", sp.Le)):
+        if tok in s:
+            lhs, rhs = s.split(tok, 1)
+            return rel(P(lhs), P(rhs))
+    for tok, rel in ((">", sp.Gt), ("<", sp.Lt)):
+        if tok in s:
+            lhs, rhs = s.split(tok, 1)
+            return rel(P(lhs), P(rhs))
     if "=" in s and "==" not in s:
         lhs, rhs = s.split("=", 1)
-        return sp.Eq(sp.parse_expr(lhs, transformations=_TRANSFORMS, local_dict=ld),
-                     sp.parse_expr(rhs, transformations=_TRANSFORMS, local_dict=ld))
-    return sp.parse_expr(s, transformations=_TRANSFORMS, local_dict=ld)
+        return sp.Eq(P(lhs), P(rhs))
+    return P(s)
 
 
 def _symbols(obj) -> List[sp.Symbol]:
