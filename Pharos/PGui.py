@@ -696,7 +696,12 @@ class PWindow(QGraphicsItem):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # --- QtWidgets auto-added by update sessions ---
-from PyQt6.QtWidgets import QCheckBox, QGridLayout, QInputDialog
+from PyQt6.QtWidgets import (QCheckBox, QGridLayout, QInputDialog,
+                             QSlider, QSplitter, QDialog, QGroupBox, QSpinBox,
+                             QPlainTextEdit, QToolBar, QRadioButton, QStatusBar,
+                             QVBoxLayout, QHBoxLayout, QFormLayout, QScrollArea,
+                             QDialogButtonBox, QButtonGroup, QFrame,
+                             QFileDialog, QMessageBox)
 
 #  PASSTHROUGH ALIASES — standalone mode (PHAROS_MODE = 0)
 #  In Pharos mode these are replaced below with P-native classes.
@@ -716,6 +721,26 @@ PTableWidget = QTableWidget
 PInputDialog = QInputDialog   # auto-added by an update session
 PGridLayout  = QGridLayout   # auto-added by an update session
 PCheckBox    = QCheckBox   # auto-added by an update session
+
+# --- added for the Kryptos / Pycrypt Tk→Qt port ---
+PSlider          = QSlider
+PSplitter        = QSplitter
+PDialog          = QDialog
+PGroupBox        = QGroupBox
+PSpinBox         = QSpinBox
+PPlainTextEdit   = QPlainTextEdit
+PToolBar         = QToolBar
+PRadioButton     = QRadioButton
+PStatusBar       = QStatusBar
+PVBoxLayout      = QVBoxLayout
+PHBoxLayout      = QHBoxLayout
+PFormLayout      = QFormLayout
+PScrollArea      = QScrollArea
+PDialogButtonBox = QDialogButtonBox
+PButtonGroup     = QButtonGroup
+PFrame           = QFrame
+PFileDialog      = QFileDialog
+PMessageBox      = QMessageBox
 
 
 # ══════════════════════════════════════════════════════════════════════════════

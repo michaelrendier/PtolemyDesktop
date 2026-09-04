@@ -1,0 +1,21 @@
+{
+  "_source": "Standard English corpus values, as used by the frequency-analysis bar charts on 'The Code Book on CD-ROM' (Simon Singh / Virtual Image).",
+  "letters_pct": {
+    "A": 8.17, "B": 1.49, "C": 2.78, "D": 4.25, "E": 12.70, "F": 2.23,
+    "G": 2.02, "H": 6.09, "I": 6.97, "J": 0.15, "K": 0.77, "L": 4.03,
+    "M": 2.41, "N": 6.75, "O": 7.51, "P": 1.93, "Q": 0.10, "R": 5.99,
+    "S": 6.33, "T": 9.06, "U": 2.76, "V": 0.98, "W": 2.36, "X": 0.15,
+    "Y": 1.97, "Z": 0.07
+  },
+  "letter_order": "ETAOINSHRDLCUMWFGYPBVKJXQZ",
+  "common_doubles": ["SS", "EE", "TT", "FF", "LL", "MM", "OO"],
+  "common_digraphs": ["TH", "HE", "IN", "ER", "AN", "RE", "ND", "ON", "EN", "AT",
+                      "OU", "ED", "HA", "TO", "OR", "IT", "IS", "HI", "ES", "NG"],
+  "common_trigraphs": ["THE", "AND", "ING", "HER", "ERE", "ENT", "THA", "NTH",
+                       "WAS", "ETH", "FOR", "DTH"],
+  "one_letter_words": ["A", "I"],
+  "two_letter_words": ["OF", "TO", "IN", "IT", "IS", "BE", "AS", "AT", "SO",
+                       "WE", "HE", "BY", "OR", "ON", "DO"],
+  "three_letter_words": ["THE", "AND"],
+  "index_of_coincidence": {"english": 0.0667, "random_26": 0.0385}
+}

@@ -1,0 +1,43 @@
+# Pycrypt — Kryptos face menu (Pharos PMenuBar plain-text format)
+
+# File
+New | clear working and change text
+Open | load a .txt message into Working Text
+Save | write Change Text (or Working Text) to a file
+Exit | close the face
+---
+
+# Cipher
+Strip Characters | reduce to a clean letter stream
+Rail Fence | zig-zag transposition
+Scytale | rod-diameter transposition
+Caesar | c = (p + k) mod 26  — 25 keys
+Affine | c = (a*p + b) mod 26  — a coprime to 26
+Pigpen | grid-fragment substitution (font)
+Monoalphabetic | any rearrangement of the alphabet — 26! keys
+Playfair | 5x5 keyed digraph cipher
+Vigenere | repeating-key Caesar
+Enigma | 3-rotor scrambler + plugboard
+---
+
+# Analysis
+Frequency Analysis | letter-frequency bar chart (al-Kindi)
+Digraph Frequency | letter-pair counts (breaks Playfair)
+Hints | repeated letters, short words, e-h asymmetry
+Vowel Trowel | Sukhotin's algorithm — locate the vowels
+Break Caesar | try all 25 shifts, rank by English fit
+Break Affine | try all 312 keys, rank by chi-squared
+Break Vigenere | Kasiski + Index of Coincidence -> keyword
+Word-Pattern Attack | match cipher words to a dictionary by pattern
+English Reference | overlay the standard English distribution
+---
+
+# Enigma
+Open Path Visualiser | watch the current flow through the rotors
+Strength of Enigma | key-space counting (rotor order, positions, plugboard)
+Rotor Set | Wehrmacht Enigma I  /  The Code Book CD-ROM
+---
+
+# Help
+About | Pycrypt — a Code Book workbench
+---

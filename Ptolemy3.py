@@ -949,11 +949,7 @@ class Ptolemy(QMainWindow):
             fn()
 
     def openKryptos(self, event=None):
-        try:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(self, 'Kryptos', 'Kryptos face not yet implemented.')
-        except Exception:
-            pass
+        return self.open_face('Kryptos.Pycrypt', 'Pycrypt')
 
     def openTesla(self, event=None):
         try:

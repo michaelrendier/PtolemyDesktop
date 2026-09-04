@@ -117,6 +117,11 @@ images/backgrounds/
 images/indicators/
 images/Phaleron/old/
 
+# ── Kryptos / Pycrypt — The Code Book assets are part of the build ──
+!Kryptos/TheCodeBook/images/
+!Kryptos/TheCodeBook/images/*.png
+!Kryptos/TheCodeBook/images/*.bmp
+
 # ── Bundled JS libraries in TWG ───────────────────────────────
 Mouseion/TWG/static/js/
 Mouseion/TWG/static/css/

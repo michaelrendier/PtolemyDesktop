@@ -66,6 +66,57 @@ REFLECTOR_WIRING = {
     'C': 'FVPJIAOYEDRZXWGCTKUQSBNMHL',
 }
 
+# ── ETW / entry wheel ──────────────────────────────────────────────────────
+# Enigma I (Wehrmacht / Luftwaffe) wired the entry wheel straight through in
+# A-B-C order, so it is the identity.  Kept explicit so the traced path has a
+# real ETW hop to draw (the commercial Enigma D used QWERTZ order here).
+ETW_IDENTITY = ALPHABET
+
+
+def load_codebook_cd_rotors(cdrom_dir):
+    """Parse Nick Mee / Virtual Image's virtual-Enigma wirings shipped on 'The
+    Code Book on CD-ROM' (`ROTOR1.INF`..`ROTOR5.INF`, `reflect1.INF`,
+    `reflect2.INF`) into the same shape as ROTOR_WIRING / ROTOR_NOTCH /
+    REFLECTOR_WIRING above.
+
+    File format (confirmed by inspection of the CD files):
+      ROTORn.INF   — 27 integers: line 0 = turnover/notch contact (0-25),
+                     lines 1-26 = the forward wiring permutation
+                     (index = input contact, value = output contact)
+      reflectn.INF — 26 integers: an involution permutation
+
+    Returns (wiring, notch, reflectors) dicts keyed 'CD-I'..'CD-V' / 'CD-B',
+    'CD-C'.  This is the rotor set a Code Book reader would actually have seen;
+    it is NOT the historical Wehrmacht wiring, and the CD emulator's exact
+    turnover semantics are unverified — so it is offered as an alternate set,
+    never the default.
+    """
+    import os
+
+    def _nums(name):
+        with open(os.path.join(cdrom_dir, name)) as f:
+            return [int(x) for x in f.read().split()]
+
+    def _perm_to_string(perm):
+        return ''.join(ALPHABET[perm[i]] for i in range(A))
+
+    wiring, notch, reflectors = {}, {}, {}
+    names = {'CD-I': 'ROTOR1.INF', 'CD-II': 'ROTOR2.INF', 'CD-III': 'ROTOR3.INF',
+             'CD-IV': 'ROTOR4.INF', 'CD-V': 'ROTOR5.INF'}
+    for label, fname in names.items():
+        raw = _nums(fname)
+        turnover, perm = raw[0], raw[1:]
+        if sorted(perm) != list(range(A)):
+            raise ValueError(f'{fname}: wiring is not a permutation of 0-25')
+        wiring[label] = _perm_to_string(perm)
+        notch[label] = ALPHABET[turnover % A]
+    for label, fname in {'CD-B': 'reflect1.INF', 'CD-C': 'reflect2.INF'}.items():
+        perm = _nums(fname)
+        if sorted(perm) != list(range(A)) or any(perm[perm[i]] != i for i in range(A)):
+            raise ValueError(f'{fname}: reflector is not an involution')
+        reflectors[label] = _perm_to_string(perm)
+    return wiring, notch, reflectors
+
 
 def _inverse(perm: str) -> str:
     inv = [''] * A
@@ -99,6 +150,19 @@ class Rotor:
         shifted = (c + self.position - self.ring) % A
         out = ALPHABET.index(self.wiring_inv[shifted])
         return (out - self.position + self.ring) % A
+
+    # ── traced variants: same maths, but also hand back the two INTERNAL
+    # contacts the current crosses inside the rotor, so the visualiser can
+    # draw the exact wire in use (offset by the rotor's rotation).
+    def forward_traced(self, c: int):
+        shifted = (c + self.position - self.ring) % A
+        out = ALPHABET.index(self.wiring[shifted])
+        return (out - self.position + self.ring) % A, shifted, out
+
+    def backward_traced(self, c: int):
+        shifted = (c + self.position - self.ring) % A
+        out = ALPHABET.index(self.wiring_inv[shifted])
+        return (out - self.position + self.ring) % A, shifted, out
 
 
 class Plugboard:
@@ -158,6 +222,51 @@ class EnigmaVector:
                f"bwd={self.rotor_backward})")
 
 
+@dataclass
+class Hop:
+    """One leg of the electrical path through the machine for a single
+    keypress.  `contact_in` / `contact_out` are absolute bus contacts (0-25,
+    the fixed frame) — they line up between components, so the visualiser
+    connects one Hop's `contact_out` to the next Hop's `contact_in`.
+
+    For rotor hops `internal_in` / `internal_out` are the two contacts the
+    current crosses INSIDE the rotor (the wire actually used), and `position`
+    is that rotor's stepping position at the moment of the keypress.
+    """
+    component: str            # 'keyboard' 'plugboard' 'ETW' 'rotor' 'reflector' 'lamp'
+    label: str                # 'III' 'II' 'I' 'B' ... or ''
+    contact_in: int
+    contact_out: int
+    internal_in: int = None
+    internal_out: int = None
+    position: int = None
+    leg: str = 'forward'      # 'forward' (key -> reflector) or 'return'
+
+    @property
+    def letter_in(self) -> str:
+        return ALPHABET[self.contact_in]
+
+    @property
+    def letter_out(self) -> str:
+        return ALPHABET[self.contact_out]
+
+
+@dataclass
+class Path:
+    """The full, ordered traversal for one keypress — 'the one function behind
+    the scenes'.  Everything the visualiser draws comes from here."""
+    letter: str               # key pressed
+    lamp: str                 # lamp lit (ciphertext letter)
+    hops: List[Hop]
+    windows: str              # rotor window letters after stepping, e.g. 'ABQ'
+    stepped: List[str] = field(default_factory=list)   # which rotors stepped
+    double_step: bool = False
+
+    def __repr__(self) -> str:
+        chain = ' → '.join(h.letter_in for h in self.hops) + f' → {self.lamp}'
+        return f"Path({self.letter}→{self.lamp} | windows={self.windows} | {chain})"
+
+
 class Enigma:
     def __init__(self, rotors: List[str] = ('I', 'II', 'III'),
                 positions: str = 'AAA', rings: str = 'AAA',
@@ -168,50 +277,100 @@ class Enigma:
         self.rotor1 = Rotor(rotors[0], positions[0], rings[0])  # left
         self.rotor2 = Rotor(rotors[1], positions[1], rings[1])  # middle
         self.rotor3 = Rotor(rotors[2], positions[2], rings[2])  # right
+        self._reflector_name = reflector
         self.reflector = REFLECTOR_WIRING[reflector]
         self.plugboard = Plugboard(plugboard)
 
-    def _step_rotors(self) -> None:
+    def _step_rotors(self):
         # Standard stepping WITH the double-stepping anomaly: the middle
         # rotor steps if it is AT its own notch (causing itself and the
         # left rotor to step together) OR if the right rotor is at its
         # notch. The right rotor always steps.
+        stepped, double = [], False
         if self.rotor2.at_notch:
-            self.rotor1.step()
-            self.rotor2.step()
+            self.rotor1.step(); self.rotor2.step()
+            stepped += ['left', 'middle']
+            double = True
         elif self.rotor3.at_notch:
             self.rotor2.step()
+            stepped.append('middle')
         self.rotor3.step()
+        stepped.append('right')
+        return stepped, double
+
+    @property
+    def windows(self) -> str:
+        """The three letters visible in the rotor windows, left to right."""
+        return (ALPHABET[self.rotor1.position]
+                + ALPHABET[self.rotor2.position]
+                + ALPHABET[self.rotor3.position])
+
+    def trace_path(self, letter: str) -> 'Path':
+        """THE traversal — historically accurate, one source of truth.
+
+        Advances the machine state (with double-stepping), then walks the
+        entire electrical circuit and records every leg as a Hop:
+
+            key → plugboard → ETW → rotor III → II → I
+                → reflector
+                → rotor I → II → III → ETW → plugboard → lamp
+
+        `press()` / `encrypt()` / `vector_trace()` all build on this; the SVG
+        visualiser draws ONLY what this returns.
+        """
+        stepped, double = self._step_rotors()
+        hops: List[Hop] = []
+
+        x = ALPHABET.index(letter.upper())
+        hops.append(Hop('keyboard', '', x, x, leg='forward'))
+
+        c = self.plugboard.swap(x)
+        hops.append(Hop('plugboard', '', x, c, leg='forward'))
+        hops.append(Hop('ETW', '', c, c, leg='forward'))
+
+        for rot, name in ((self.rotor3, 'III'), (self.rotor2, 'II'), (self.rotor1, 'I')):
+            nxt, ii, io = rot.forward_traced(c)
+            hops.append(Hop('rotor', name, c, nxt, ii, io, rot.position, 'forward'))
+            c = nxt
+
+        r = ALPHABET.index(self.reflector[c])
+        hops.append(Hop('reflector', self._reflector_name, c, r, leg='return'))
+        c = r
+
+        for rot, name in ((self.rotor1, 'I'), (self.rotor2, 'II'), (self.rotor3, 'III')):
+            nxt, ii, io = rot.backward_traced(c)
+            hops.append(Hop('rotor', name, c, nxt, ii, io, rot.position, 'return'))
+            c = nxt
+
+        hops.append(Hop('ETW', '', c, c, leg='return'))
+        out = self.plugboard.swap(c)
+        hops.append(Hop('plugboard', '', c, out, leg='return'))
+        hops.append(Hop('lamp', '', out, out, leg='return'))
+
+        return Path(letter=ALPHABET[x], lamp=ALPHABET[out], hops=hops,
+                    windows=self.windows, stepped=stepped, double_step=double)
 
     def press(self, letter: str) -> EnigmaVector:
-        self._step_rotors()
-
-        p_in = ALPHABET.index(letter.upper())
-        c0 = self.plugboard.swap(p_in)
-
-        c1 = self.rotor3.forward(c0)
-        c2 = self.rotor2.forward(c1)
-        c3 = self.rotor1.forward(c2)
-        fwd = RotorQuaternion(i=ALPHABET[c1], j=ALPHABET[c2], k=ALPHABET[c3],
-                              real=ALPHABET[c3])
-
-        c4 = ALPHABET.index(self.reflector[c3])
-
-        c5 = self.rotor1.backward(c4)
-        c6 = self.rotor2.backward(c5)
-        c7 = self.rotor3.backward(c6)
-        bwd = RotorQuaternion(i=ALPHABET[c5], j=ALPHABET[c6], k=ALPHABET[c7],
-                              real=ALPHABET[c7])
-
-        out = self.plugboard.swap(c7)
-
+        """Kept for the (w, i, j, k) quaternion framing — now just a repackage
+        of trace_path()'s Hop list."""
+        path = self.trace_path(letter)
+        h = path.hops
+        # h: [key, plug, ETW, rIII, rII, rI, reflector, rI, rII, rIII, ETW, plug, lamp]
+        fwd = RotorQuaternion(i=h[3].letter_out, j=h[4].letter_out,
+                              k=h[5].letter_out, real=h[5].letter_out)
+        bwd = RotorQuaternion(i=h[7].letter_out, j=h[8].letter_out,
+                              k=h[9].letter_out, real=h[9].letter_out)
         return EnigmaVector(
-            plugboard_in=ALPHABET[c0], rotor_forward=fwd,
-            reflector=ALPHABET[c4], rotor_backward=bwd, real=ALPHABET[out])
+            plugboard_in=h[1].letter_out, rotor_forward=fwd,
+            reflector=h[6].letter_out, rotor_backward=bwd, real=path.lamp)
 
     def encrypt(self, text: str) -> str:
         text = ''.join(ch for ch in text.upper() if ch in ALPHABET)
-        return ''.join(self.press(ch).real for ch in text)
+        return ''.join(self.trace_path(ch).lamp for ch in text)
+
+    def path_trace(self, text: str) -> List['Path']:
+        text = ''.join(ch for ch in text.upper() if ch in ALPHABET)
+        return [self.trace_path(ch) for ch in text]
 
     def vector_trace(self, text: str) -> List[EnigmaVector]:
         text = ''.join(ch for ch in text.upper() if ch in ALPHABET)
@@ -248,3 +407,30 @@ if __name__ == '__main__':
     print("vector trace, 'HELLO', plugboard AB CD:")
     for o in e3.vector_trace('HELLO'):
         print(f"  {o}")
+    print()
+
+    # trace_path is the single source of truth: its lamp must equal encrypt(),
+    # its hop chain must be contiguous (each hop's out == next hop's in), and
+    # the first keypress from AAA must step the fast rotor A -> B.
+    e4 = Enigma(rotors=['I', 'II', 'III'], positions='AAA', rings='AAA', reflector='B')
+    p = e4.trace_path('A')
+    assert p.lamp == 'B', p
+    assert p.windows == 'AAB', p.windows
+    for h1, h2 in zip(p.hops, p.hops[1:]):
+        assert h1.contact_out == h2.contact_in, (h1, h2)
+    assert [h.component for h in p.hops] == [
+        'keyboard', 'plugboard', 'ETW', 'rotor', 'rotor', 'rotor',
+        'reflector', 'rotor', 'rotor', 'rotor', 'ETW', 'plugboard', 'lamp']
+    e5 = Enigma(rotors=['I', 'II', 'III'], positions='AAA', rings='AAA', reflector='B')
+    assert ''.join(e5.trace_path(c).lamp for c in 'AAAAA') == 'BDZGO'
+    print("trace_path self-test: HOLDS  (chain contiguous, lamp == encrypt)")
+
+    # optional: The Code Book CD-ROM rotor set, if the CD tree is present
+    import os
+    _cd = os.path.join(os.path.dirname(__file__), '..', 'TheCodeBook',
+                       'cdrom', 'Codebook')
+    if os.path.isfile(os.path.join(_cd, 'ROTOR1.INF')):
+        w, n, refl = load_codebook_cd_rotors(_cd)
+        assert set(w) == {'CD-I', 'CD-II', 'CD-III', 'CD-IV', 'CD-V'}
+        assert set(refl) == {'CD-B', 'CD-C'}
+        print(f"Code Book CD rotor set parsed: {sorted(w)} + {sorted(refl)}")
