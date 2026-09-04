@@ -364,6 +364,80 @@ class MonadLink:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  Harness link — the frame seam to a resident C monad (`ptol -w`)
+# ──────────────────────────────────────────────────────────────────────────────
+#  ptol.c forks this console onto the tty and keeps the other end of a
+#  socketpair, answering `say` frames with the sedenion word shadow through
+#  PtolC/monad_harness.c.  Newline-delimited JSON, matching console_link.py.
+# ══════════════════════════════════════════════════════════════════════════════
+class HarnessLink:
+    def __init__(self, fd: int) -> None:
+        self._f = os.fdopen(fd, "r+", buffering=1, encoding="utf-8", newline="\n")
+        self._id = 0
+        self._lock = threading.Lock()
+
+    def send(self, frame: Dict[str, Any]) -> None:
+        import json                                              # noqa: PLC0415
+        with self._lock:
+            self._f.write(json.dumps(frame, default=str) + "\n")
+            self._f.flush()
+
+    def rpc(self, frame: Dict[str, Any], want: str = "chat",
+            timeout: float = 10.0) -> Optional[Dict[str, Any]]:
+        import json                                              # noqa: PLC0415
+        self._id += 1
+        rid = self._id
+        self.send({**frame, "id": rid})
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            line = self._f.readline()
+            if not line:
+                return None
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                f = json.loads(line)
+            except ValueError:
+                continue
+            if f.get("t") in (want, "error") and f.get("id") in (None, rid):
+                return f
+        return None
+
+
+class HarnessMonad:
+    """MonadLink-shaped: routes say() to the resident C monad, falls back to
+    the in-process `local` MonadLink if the link is silent."""
+
+    def __init__(self, link: HarnessLink, local: "MonadLink") -> None:
+        self._link = link
+        self._local = local
+        self.enabled = True
+        self.kind = "ptol -w (resident C monad)"
+        self.last_geom: Dict[str, Any] = {}
+
+    def say(self, text: str) -> Tuple[str, Dict[str, Any]]:
+        if not self.enabled:
+            return ("(monad detached — harness only)", {"via": "detached"})
+        try:
+            f = self._link.rpc({"t": "say", "text": text}, want="chat")
+        except Exception:                                        # noqa: BLE001
+            f = None
+        if f and f.get("t") == "chat":
+            g = {k: f[k] for k in ("sigma", "gamma", "primes", "mode") if k in f}
+            self.last_geom = g
+            tail = ""
+            if g.get("primes"):
+                tail = (f"   [σ={float(g.get('sigma', 0)):.3f} "
+                        f"Γ={float(g.get('gamma', 0)):+.3f} · primes {g['primes']}]")
+            return (str(f.get("text", "")).strip() + tail, {"via": "harness", "geom": g})
+        return self._local.say(text)
+
+    def status(self) -> str:
+        return self.kind
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  SUPPORT harness  (Tolkien / Diagnostic Support)
 # ══════════════════════════════════════════════════════════════════════════════
 class SupportHarness:
@@ -670,6 +744,8 @@ class StitchBoard:
         # support harness gets a lazy handle to the registry.
         self.support = SupportHarness(self.sink, self._get_registry)
         self.active = ActiveHarness(self.monad)
+        self._mode = "sentence"      # sentence construction (default) | paragraph
+        self.harness: Optional["HarnessLink"] = None  # set in --harness mode
         self._acked: set = set()          # (face, stamp, level) already routed
         self._judgements: List[Judgement] = []   # Ptolemy's decisions, in order
         # faces may read/propose code within this root; writes are Ptolemy-gated
@@ -705,6 +781,17 @@ class StitchBoard:
             for ln in self.support.radio_check():
                 self.sink.put(ln)
             return "(radio-check queued)"
+        if m.startswith("/paragraph"):
+            self._mode = "paragraph"
+            self._send_mode()
+            return ("(mode: paragraph — a prompt of >1 sentence gets its "
+                    "paragraph grammar; /sentence returns to the default)")
+        if m.startswith("/sentence"):
+            self._mode = "sentence"
+            self._send_mode()
+            return "(mode: sentence construction — the default)"
+        if m.startswith("/mode"):
+            return f"(construction mode: {self._mode})"
         if m.startswith("/tool "):
             return self.active.present(m[6:], kind="tool-request")
         if m.startswith("/diag"):
@@ -756,7 +843,42 @@ class StitchBoard:
         if prof is not None:
             return prof
         reply, meta = self.monad.say(m)
+        if self._mode == "paragraph":
+            reply = self._with_paragraph_grammar(m, reply)
         return reply
+
+    def _send_mode(self) -> None:
+        if self.harness is not None:
+            try:
+                self.harness.send({"t": "mode", "mode": self._mode})
+            except Exception:                                    # noqa: BLE001
+                pass
+
+    def _with_paragraph_grammar(self, prompt: str, reply: str) -> str:
+        """Layer semantic_paragraph.py's paragraph read onto a monad reply —
+        the higher-order prime semantic hash over the prompt's sentence
+        structure (VAPMIP/semantic_paragraph.py)."""
+        try:
+            vp = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "VAPMIP")
+            if vp not in sys.path:
+                sys.path.insert(0, vp)
+            import semantic_paragraph as sp                      # noqa: PLC0415
+            if not sp.is_paragraph(prompt):
+                return reply
+            try:
+                h = sp.paragraph_hash(prompt)
+                arc = " → ".join(h["grammar"])
+                sup = ", ".join(h["support"][:8])
+                return (f"{reply}\n"
+                        f"  ¶ {h['n_sentences']} sentences   arc: {arc}\n"
+                        f"  ¶ support: {sup}")
+            except Exception:                                    # noqa: BLE001
+                n = len(sp.split_sentences(prompt))
+                return (f"{reply}\n  ¶ {n} sentences "
+                        f"(prime hash unavailable — WordNet not loaded)")
+        except Exception as e:                                   # noqa: BLE001
+            return f"{reply}\n  ¶ (paragraph mode: {type(e).__name__})"
 
     _archimedes_face = None
 
@@ -891,10 +1013,15 @@ class PtolemyConsole:
         self.registry = registry
         self.lines: List[str] = [
             f"{NAME} console — PtolemyDesktop Core.  "
-            f"Tab: the ValaQuenta Tab (Archimedes)   "
-            f"/faces /poll /enc /proposals /approve /radio /diag   q: quit",
+            f"1-4 / ←→: tabs   Tab: ValaQuenta   "
+            f"/paragraph /sentence /faces /poll /enc /radio /diag   q: quit",
             f"  {board.status_line()}", ""]
         self.input = ""
+        # the tabs discussed — unbuilt ones are greyed and unselectable
+        self.tabs: List[List[Any]] = [
+            ["Chat", True], ["ValaQuenta", True],
+            ["Generational Lineage", False], ["Archimedes", False]]
+        self.tab = 0
 
     def _push(self, s: str) -> None:
         for seg in (textwrap.wrap(s, max(20, self.scr.getmaxyx()[1] - 2)) or [""]):
@@ -923,7 +1050,11 @@ class PtolemyConsole:
                     time.sleep(0.05)
                     continue
                 if k in (ord("\t"),):
-                    self._derivation_subloop()
+                    self._select_tab(1)          # Tab -> the ValaQuenta Tab
+                elif k in (curses.KEY_F1, curses.KEY_F2, curses.KEY_F3, curses.KEY_F4):
+                    self._select_tab(k - curses.KEY_F1)
+                elif k in (curses.KEY_LEFT, curses.KEY_RIGHT) and not self.input:
+                    self._move_tab(-1 if k == curses.KEY_LEFT else 1)
                 elif k in (curses.KEY_ENTER, 10, 13):
                     self._submit()
                 elif k in (curses.KEY_BACKSPACE, 127, 8):
@@ -950,6 +1081,29 @@ class PtolemyConsole:
         if reply:
             self._push(f"  {reply}")
 
+    def _move_tab(self, d: int) -> None:
+        i = self.tab
+        for _ in range(len(self.tabs)):
+            i = (i + d) % len(self.tabs)
+            if self.tabs[i][1]:
+                self._select_tab(i)
+                return
+
+    def _select_tab(self, i: int) -> None:
+        if not (0 <= i < len(self.tabs)):
+            return
+        name, on = self.tabs[i]
+        if not on:
+            self._push(f"({name} tab — greyed: not built yet)")
+            return
+        if name == "ValaQuenta":
+            self.tab = i
+            self._draw()
+            self._derivation_subloop()
+            self.tab = 0                 # ValaQuenta is a subloop; land back on Chat
+            return
+        self.tab = i
+
     def _derivation_subloop(self) -> None:
         """Tab into the ValaQuenta Tab.  Archimedes runs it."""
         arch = self.board.support.faces.get("Archimedes")
@@ -967,18 +1121,40 @@ class PtolemyConsole:
             curses.curs_set(1)
             self._push("(back from the ValaQuenta Tab — Archimedes)")
 
+    def _draw_tabbar(self, w: int) -> None:
+        x = 0
+        for i, (name, on) in enumerate(self.tabs):
+            cell = f" {name} "
+            if i == self.tab:
+                attr = curses.A_REVERSE | curses.A_BOLD
+            elif on:
+                attr = curses.A_BOLD
+            else:
+                attr = curses.A_DIM
+            try:
+                if x < w - 1:
+                    self.scr.addstr(0, x, cell[:max(0, w - 1 - x)], attr)
+                x += len(cell)
+                if x < w - 1:
+                    self.scr.addstr(0, x, "│", curses.A_DIM)
+                x += 1
+            except curses.error:
+                pass
+
     def _draw(self) -> None:
         self.scr.erase()
         h, w = self.scr.getmaxyx()
-        body = self.lines[-(h - 2):]
+        self._draw_tabbar(w)
+        body = self.lines[-(h - 3):]
         for i, ln in enumerate(body):
             try:
-                self.scr.addstr(i, 0, ln[:w - 1])
+                self.scr.addstr(i + 1, 0, ln[:w - 1])
             except curses.error:
                 pass
         try:
             self.scr.addstr(h - 2, 0, self.board.status_line()[:w - 1], curses.A_DIM)
-            self.scr.addstr(h - 1, 0, f"{NAME}> {self.input}"[:w - 1])
+            prompt = f"{NAME}[{self.board._mode[:4]}]> {self.input}"
+            self.scr.addstr(h - 1, 0, prompt[:w - 1])
         except curses.error:
             pass
         self.scr.refresh()
@@ -1085,13 +1261,31 @@ def main() -> int:
     ap.add_argument("--selftest", action="store_true", help="headless smoke, no curses")
     ap.add_argument("--port", action="store_true",
                     help="frame-protocol mode (console_link) — no curses")
+    ap.add_argument("--harness", type=int, metavar="FD", default=None,
+                    help="run curses with the speaking monad on a resident C "
+                         "process (`ptol -w`) over frame FD")
     args = ap.parse_args()
     if args.selftest:
         return selftest()
     if args.port:
         return run_port()          # hibernated: no curses; the desktop renders the tabs
+
     board = StitchBoard()
+    if args.harness is not None:
+        try:
+            link = HarnessLink(args.harness)
+            board.harness = link
+            board.monad = HarnessMonad(link, board.monad)
+            board.active = ActiveHarness(board.monad)
+            link.send({"t": "attach", "who": "ptolemy_console"})
+        except Exception:                                        # noqa: BLE001
+            board.harness = None       # link failed -> in-process MonadLink stays
     curses.wrapper(lambda scr: PtolemyConsole(scr, board, board.registry).run())
+    if board.harness is not None:
+        try:
+            board.harness.send({"t": "quit"})
+        except Exception:                                        # noqa: BLE001
+            pass
     return 0
 
 
