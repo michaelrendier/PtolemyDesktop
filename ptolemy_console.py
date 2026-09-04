@@ -1018,38 +1018,344 @@ def _load_registry():
         return None
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  The Ptolemy Manager — one pcmanfm-style frame, folder tabs raise a Pane
+# ──────────────────────────────────────────────────────────────────────────────
+#  Constant chrome: [folder tabs][path/crumb][ nav box │ main view ][status][input]
+#  A `Pane` supplies the contents of each box for its tab; switching tabs just
+#  raises a different Pane. The boxes are independent — nav / view / keypad /
+#  input — layered into the same structure the ValaQuenta browser uses.
+# ══════════════════════════════════════════════════════════════════════════════
+class Pane:
+    name = "?"
+    enabled = True
+    takes_input = False
+    input_hint = ""
+    keypad: List[str] = []
+
+    def __init__(self, console: "PtolemyConsole") -> None:
+        self.c = console
+        self.sel = 0
+        self.vscroll = 0
+
+    # contents of each box (override as needed)
+    def crumb(self) -> str:
+        return f" ⌂ / {self.name}"
+
+    def nav_title(self) -> str:
+        return self.name.upper()
+
+    def nav_items(self) -> List[str]:
+        return []
+
+    def view_title(self) -> str:
+        return ""
+
+    def view_lines(self, w: int) -> List[str]:
+        return []
+
+    # events
+    def on_activate(self, item: str) -> None:    # Enter / → on a nav row
+        pass
+
+    def on_back(self) -> None:                   # ←
+        pass
+
+    def on_submit(self, text: str) -> None:      # Enter on the input line
+        pass
+
+    def on_show(self) -> None:                   # this pane raised to the top
+        pass
+
+    # helper
+    def _clamp_sel(self) -> None:
+        n = len(self.nav_items())
+        self.sel = 0 if n == 0 else max(0, min(self.sel, n - 1))
+
+
+class ChatPane(Pane):
+    name = "Chat"
+    takes_input = True
+
+    _CMDS = ["› sentence mode", "› paragraph mode", "/faces", "/diag",
+             "/radio", "/proposals", "/monad"]
+
+    @property
+    def input_hint(self) -> str:
+        return f"{NAME}[{self.c.board._mode[:4]}]> "
+
+    def crumb(self) -> str:
+        return f" ⌂ / Chat · {self.c.board._mode}"
+
+    def nav_title(self) -> str:
+        return "COMMANDS · FACES"
+
+    def nav_items(self) -> List[str]:
+        rows = list(self._CMDS) + ["", "— faces —"]
+        for nm, face in self.c.board.support.faces.items():
+            p = self.c.board.support.latest.get(nm)
+            tail = f"  {p.weight:.2f}" if p else ""
+            rows.append(f"  {nm}{tail}")
+        return rows
+
+    def view_title(self) -> str:
+        return "TRANSCRIPT"
+
+    def view_lines(self, w: int) -> List[str]:
+        return self.c.lines[-400:]
+
+    def on_activate(self, item: str) -> None:
+        it = item.strip("› ").strip()
+        if it == "sentence mode":
+            self.c._route("/sentence")
+        elif it == "paragraph mode":
+            self.c._route("/paragraph")
+        elif it.startswith("/"):
+            self.c._route(it)
+        elif it and not it.startswith("—") and it in self.c.board.support.faces:
+            self.c._route(f"/poll {it}")
+
+    def on_submit(self, text: str) -> None:
+        self.c._push(f"{NAME}> {text}")
+        if text.strip() != "q":
+            self.c._route(text)
+
+
+class ArchimedesPane(Pane):
+    name = "Archimedes"
+    takes_input = True
+    input_hint = "ask Archimedes> "
+    keypad = ["Integral( )", "Derivative( )", "Sum( )", "sqrt( )", "pi",
+              "^", "*", "==", "solve … for x"]
+
+    def __init__(self, console: "PtolemyConsole") -> None:
+        super().__init__(console)
+        self.level = 0            # 0 = categories, 1 = equations of self.cat
+        self.cat = ""
+        self.detail: List[str] = []
+        self._by_cat: Dict[str, list] = {}
+        self._pages: Dict[str, dict] = {}
+        self._face = None
+        self._err = ""
+
+    def _load(self) -> None:
+        if self._by_cat or self._err:
+            return
+        try:
+            import sys as _sys
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in _sys.path:
+                _sys.path.insert(0, here)
+            from Archimedes.Maths.researcher import by_category, pages  # noqa: PLC0415
+            from Archimedes.face import ArchimedesFace                  # noqa: PLC0415
+            self._by_cat = by_category()
+            self._pages = pages()
+            self._face = ArchimedesFace()
+        except Exception as e:                                          # noqa: BLE001
+            self._err = f"{type(e).__name__}: {e}"
+
+    def on_show(self) -> None:
+        self._load()
+
+    def crumb(self) -> str:
+        p = " ⌂ / Archimedes"
+        if self.level >= 1 and self.cat:
+            p += f" / {self.cat}"
+        return p
+
+    def nav_title(self) -> str:
+        return "CATEGORIES" if self.level == 0 else self.cat.upper()
+
+    def nav_items(self) -> List[str]:
+        self._load()
+        if self._err:
+            return ["(formulary unavailable)"]
+        if self.level == 0:
+            return sorted(self._by_cat)
+        rows = [".."]
+        rows += [md.name for md in self._by_cat.get(self.cat, [])]
+        return rows
+
+    def view_title(self) -> str:
+        return "DETAIL"
+
+    def view_lines(self, w: int) -> List[str]:
+        if self._err:
+            return ["The Archimedes formulary did not load:", "  " + self._err,
+                    "", "Run  python -m Archimedes.Maths.researcher  to check."]
+        if self.detail:
+            return self.detail
+        items = self.nav_items()
+        if not items:
+            return []
+        cur = items[min(self.sel, len(items) - 1)]
+        if self.level == 0:
+            pg = next((v for k, v in self._pages.items() if k.endswith(cur)), {})
+            defs = self._by_cat.get(cur, [])
+            out = [pg.get("title", cur), ""]
+            if pg.get("blurb"):
+                out += textwrap.wrap(pg["blurb"], max(20, w - 2)) + [""]
+            out.append(f"{len(defs)} formulae — → to open the list")
+            return out
+        return ["→ open this formula for its expression and every",
+                "  rearranged form (each variable across the =)."]
+
+    def _show_formula(self, name: str) -> None:
+        defs = self._by_cat.get(self.cat, [])
+        md = next((d for d in defs if d.name == name), None)
+        if md is None:
+            self.detail = [f"(no formula '{name}')"]
+            return
+        out = [md.name, "=" * min(len(md.name), 60), f"  {md.expr}"]
+        jur = getattr(md, "jurisdiction", "") or ""
+        if jur:
+            out.append(f"  jurisdiction: {jur}")
+        sibs = [d for d in defs
+                if d.id.rsplit("__", 1)[0] == md.id.rsplit("__", 1)[0]
+                and d.id != md.id]
+        if sibs:
+            out += ["", "rearranged forms:"]
+            out += [f"  {d.name.split('— ')[-1]:<16} {d.expr}" for d in sibs]
+        self.detail = out
+
+    def on_activate(self, item: str) -> None:
+        self.detail = []
+        if self._err:
+            return
+        if self.level == 0:
+            self.cat = item.strip()
+            self.level = 1
+            self.sel = 0
+        else:
+            if item.strip() == "..":
+                self.on_back()
+            else:
+                self._show_formula(item.strip())
+
+    def on_back(self) -> None:
+        self.detail = []
+        if self.level == 1:
+            self.level = 0
+            self.sel = 0
+
+    def on_submit(self, text: str) -> None:
+        self._load()
+        if self._face is None:
+            self.detail = ["(Archimedes face unavailable)"]
+            return
+        try:
+            ans = self._face.answer(text)
+        except Exception as e:                                         # noqa: BLE001
+            ans = f"(error: {type(e).__name__}: {e})"
+        self.detail = [f"ask> {text}", "", ans or
+                       "(not established maths I can state — Ptolemy would keep it)"]
+
+
+class LineagePane(Pane):
+    name = "Generational Lineage"
+    enabled = False
+
+    def nav_items(self) -> List[str]:
+        return ["(engine not wired into the console yet)"]
+
+    def view_title(self) -> str:
+        return "GREYED"
+
+    def view_lines(self, w: int) -> List[str]:
+        return ["The Generational Lineage engine (GenerationalLineage/) is not",
+                "tied into the Ptolemy manager yet. This tab is a placeholder —",
+                "the frame is here; the contents are the next build."]
+
+
+class ValaQuentaPane(Pane):
+    name = "ValaQuenta"
+
+    def nav_items(self) -> List[str]:
+        return ["Open the Derivation Browser  →"]
+
+    def view_title(self) -> str:
+        return "DERIVATION BROWSER"
+
+    def view_lines(self, w: int) -> List[str]:
+        return ["Archimedes runs the ValaQuenta tab — the full-screen",
+                "Derivation Browser (its own nav + view + proof panels).",
+                "", "→ or Enter to raise it; q inside returns here."]
+
+    def on_activate(self, item: str) -> None:
+        self.c._run_derivation_subloop()
+
+
 class PtolemyConsole:
     def __init__(self, stdscr, board: StitchBoard, registry) -> None:
         self.scr = stdscr
         self.board = board
         self.registry = registry
         self.lines: List[str] = [
-            f"{NAME} console — PtolemyDesktop Core.  "
-            f"1-4 / ←→: tabs   Tab: ValaQuenta   "
-            f"/paragraph /sentence /faces /poll /enc /radio /diag   q: quit",
+            f"{NAME} — the Ptolemy manager.  F1-F4 / Tab: folder tabs   "
+            f"↑↓: nav   →/Enter: open   ←: up   q: quit",
             f"  {board.status_line()}", ""]
         self.input = ""
-        # the tabs discussed — unbuilt ones are greyed and unselectable
-        self.tabs: List[List[Any]] = [
-            ["Chat", True], ["ValaQuenta", True],
-            ["Generational Lineage", False], ["Archimedes", False]]
+        self.panes: List[Pane] = [ChatPane(self), ValaQuentaPane(self),
+                                  LineagePane(self), ArchimedesPane(self)]
         self.tab = 0
 
+    @property
+    def pane(self) -> Pane:
+        return self.panes[self.tab]
+
+    # ── transcript / routing (Chat) ──────────────────────────────────────
     def _push(self, s: str) -> None:
         for seg in (textwrap.wrap(s, max(20, self.scr.getmaxyx()[1] - 2)) or [""]):
             self.lines.append(seg)
 
+    def _route(self, msg: str) -> None:
+        reply = self.board.route(msg)
+        self._flush_support()
+        if reply:
+            self._push(f"  {reply}")
+
     def _flush_support(self) -> None:
-        for ln in self.board.drain():                 # face posts -> Chat Tab
+        for ln in self.board.drain():
             self._push(ln)
-        for ln in self.board.review_faces():          # Ptolemy's acks
+        for ln in self.board.review_faces():
             self._push(ln)
 
+    # ── ValaQuenta full-screen sub-loop (raised to the top) ──────────────
+    def _run_derivation_subloop(self) -> None:
+        arch = self.board.support.faces.get("Archimedes")
+        if arch is None or not arch.runs_tab:
+            self._push("(Archimedes has no Derivation Browser)")
+            return
+        try:
+            self.scr.nodelay(False)
+            curses.curs_set(0)
+            arch.run_tab(self.scr)
+        except Exception as e:                                    # noqa: BLE001
+            self._push(f"(Derivation Browser error: {type(e).__name__}: {e})")
+        finally:
+            self.scr.nodelay(True)
+            curses.curs_set(1)
+
+    # ── tab switching ───────────────────────────────────────────────────
+    def _select_tab(self, i: int, cycle: bool = False) -> None:
+        if not (0 <= i < len(self.panes)):
+            return
+        if cycle:                       # Tab/BTab skip disabled panes
+            for _ in range(len(self.panes)):
+                if self.panes[i].enabled:
+                    break
+                i = (i + 1) % len(self.panes)
+        self.tab = i
+        self.pane._clamp_sel()
+        self.pane.on_show()
+
+    # ── main loop ───────────────────────────────────────────────────────
     def run(self) -> None:
         curses.curs_set(1)
         self.scr.nodelay(True)
         self.scr.keypad(True)
         self.board.support.start()
+        self.pane.on_show()
         try:
             while True:
                 self._flush_support()
@@ -1061,114 +1367,159 @@ class PtolemyConsole:
                 if k == -1:
                     time.sleep(0.05)
                     continue
-                if k in (ord("\t"),):
-                    self._select_tab(1)          # Tab -> the ValaQuenta Tab
-                elif k in (curses.KEY_F1, curses.KEY_F2, curses.KEY_F3, curses.KEY_F4):
+                if k == 27:                       # ESC — may be a split CSI seq
+                    k = self._resolve_escape()
+                    if k is None:
+                        continue
+                p = self.pane
+                if k in (curses.KEY_F1, curses.KEY_F2, curses.KEY_F3, curses.KEY_F4):
                     self._select_tab(k - curses.KEY_F1)
-                elif k in (curses.KEY_LEFT, curses.KEY_RIGHT) and not self.input:
-                    self._move_tab(-1 if k == curses.KEY_LEFT else 1)
+                elif k == ord("\t"):
+                    self._select_tab((self.tab + 1) % len(self.panes), cycle=True)
+                elif k == curses.KEY_BTAB:
+                    self._select_tab((self.tab - 1) % len(self.panes), cycle=True)
+                elif k == 4:                                    # Ctrl-D
+                    break
+                elif k in (curses.KEY_UP,):
+                    p.sel = max(0, p.sel - 1)
+                elif k in (curses.KEY_DOWN,):
+                    p.sel = min(max(0, len(p.nav_items()) - 1), p.sel + 1)
+                elif k in (curses.KEY_LEFT,):
+                    p.on_back()
+                elif k in (curses.KEY_RIGHT,):
+                    items = p.nav_items()
+                    if items:
+                        p.on_activate(items[min(p.sel, len(items) - 1)])
                 elif k in (curses.KEY_ENTER, 10, 13):
-                    self._submit()
+                    if p.takes_input and self.input.strip():
+                        if self.input.strip() == "q":
+                            break
+                        txt, self.input = self.input, ""
+                        p.on_submit(txt)
+                    else:
+                        items = p.nav_items()
+                        if items:
+                            p.on_activate(items[min(p.sel, len(items) - 1)])
                 elif k in (curses.KEY_BACKSPACE, 127, 8):
-                    self.input = self.input[:-1]
-                elif k == 4:  # Ctrl-D
-                    break
-                elif 32 <= k < 127:
+                    if p.takes_input:
+                        self.input = self.input[:-1]
+                elif 32 <= k < 127 and p.takes_input:
                     self.input += chr(k)
-                if self.input.strip() == "q" and k in (curses.KEY_ENTER, 10, 13):
-                    break
         finally:
             self.board.support.stop()
 
-    def _submit(self) -> None:
-        msg = self.input
-        self.input = ""
-        if not msg.strip():
-            return
-        self._push(f"{NAME}> {msg}")
-        if msg.strip() == "q":
-            return
-        reply = self.board.route(msg)
-        self._flush_support()
-        if reply:
-            self._push(f"  {reply}")
-
-    def _move_tab(self, d: int) -> None:
-        i = self.tab
-        for _ in range(len(self.tabs)):
-            i = (i + d) % len(self.tabs)
-            if self.tabs[i][1]:
-                self._select_tab(i)
-                return
-
-    def _select_tab(self, i: int) -> None:
-        if not (0 <= i < len(self.tabs)):
-            return
-        name, on = self.tabs[i]
-        if not on:
-            self._push(f"({name} tab — greyed: not built yet)")
-            return
-        if name == "ValaQuenta":
-            self.tab = i
-            self._draw()
-            self._derivation_subloop()
-            self.tab = 0                 # ValaQuenta is a subloop; land back on Chat
-            return
-        self.tab = i
-
-    def _derivation_subloop(self) -> None:
-        """Tab into the ValaQuenta Tab.  Archimedes runs it."""
-        arch = self.board.support.faces.get("Archimedes")
-        if arch is None or not arch.runs_tab:
-            self._push("(Archimedes has no ValaQuenta Tab)")
-            return
+    def _resolve_escape(self):
+        """A lone ESC under nodelay may be a split CSI/SS3 sequence. Drain the
+        rest briefly and map it; swallow anything unrecognised (return None)."""
+        self.scr.nodelay(False)
+        self.scr.timeout(40)
+        seq = []
         try:
-            self.scr.nodelay(False)
-            curses.curs_set(0)
-            arch.run_tab(self.scr)
-        except Exception as e:                                    # noqa: BLE001
-            self._push(f"(ValaQuenta Tab error: {type(e).__name__}: {e})")
+            while True:
+                n = self.scr.getch()
+                if n == -1 or len(seq) > 6:
+                    break
+                seq.append(n)
+        except curses.error:
+            pass
         finally:
+            self.scr.timeout(-1)
             self.scr.nodelay(True)
-            curses.curs_set(1)
-            self._push("(back from the ValaQuenta Tab — Archimedes)")
+        s = "".join(chr(c) for c in seq if 0 <= c < 128)
+        return {
+            "[A": curses.KEY_UP, "OA": curses.KEY_UP,
+            "[B": curses.KEY_DOWN, "OB": curses.KEY_DOWN,
+            "[C": curses.KEY_RIGHT, "OC": curses.KEY_RIGHT,
+            "[D": curses.KEY_LEFT, "OD": curses.KEY_LEFT,
+            "[Z": curses.KEY_BTAB,
+            "OP": curses.KEY_F1, "OQ": curses.KEY_F2,
+            "OR": curses.KEY_F3, "OS": curses.KEY_F4,
+            "[11~": curses.KEY_F1, "[12~": curses.KEY_F2,
+            "[13~": curses.KEY_F3, "[14~": curses.KEY_F4,
+        }.get(s)
 
-    def _draw_tabbar(self, w: int) -> None:
+    # ── the frame ───────────────────────────────────────────────────────
+    def _put(self, y: int, x: int, s: str, attr: int = 0) -> None:
+        try:
+            h, w = self.scr.getmaxyx()
+            if 0 <= y < h and x < w:
+                self.scr.addstr(y, x, s[:max(0, w - 1 - x)], attr)
+        except curses.error:
+            pass
+
+    def _draw_tabs(self, w: int) -> None:
         x = 0
-        for i, (name, on) in enumerate(self.tabs):
-            cell = f" {name} "
+        for i, pn in enumerate(self.panes):
+            cell = f" {pn.name} "
             if i == self.tab:
                 attr = curses.A_REVERSE | curses.A_BOLD
-            elif on:
+            elif pn.enabled:
                 attr = curses.A_BOLD
             else:
                 attr = curses.A_DIM
-            try:
-                if x < w - 1:
-                    self.scr.addstr(0, x, cell[:max(0, w - 1 - x)], attr)
-                x += len(cell)
-                if x < w - 1:
-                    self.scr.addstr(0, x, "│", curses.A_DIM)
-                x += 1
-            except curses.error:
-                pass
+            self._put(0, x, cell, attr)
+            x += len(cell)
+            self._put(0, x, "│", curses.A_DIM)
+            x += 1
+
+    def _draw_box(self, y: int, x: int, bh: int, bw: int, title: str,
+                  lines: List[str], selrow: int = -1, focus: bool = False) -> None:
+        tattr = curses.A_BOLD if focus else curses.A_DIM
+        self._put(y, x, ("┌─ " + title + " ").ljust(bw - 1, "─") + "┐", tattr)
+        for r in range(1, bh - 1):
+            self._put(y + r, x, "│", curses.A_DIM)
+            self._put(y + r, x + bw - 1, "│", curses.A_DIM)
+        self._put(y + bh - 1, x, "└".ljust(bw - 1, "─") + "┘", curses.A_DIM)
+        inner_h = bh - 2
+        top = 0
+        if selrow >= inner_h:
+            top = selrow - inner_h + 1
+        for r, ln in enumerate(lines[top:top + inner_h]):
+            attr = 0
+            if top + r == selrow:
+                attr = curses.A_REVERSE | (curses.A_BOLD if focus else 0)
+            self._put(y + 1 + r, x + 2, ln[:bw - 4].ljust(bw - 4), attr)
 
     def _draw(self) -> None:
         self.scr.erase()
         h, w = self.scr.getmaxyx()
-        self._draw_tabbar(w)
-        body = self.lines[-(h - 3):]
-        for i, ln in enumerate(body):
-            try:
-                self.scr.addstr(i + 1, 0, ln[:w - 1])
-            except curses.error:
-                pass
-        try:
-            self.scr.addstr(h - 2, 0, self.board.status_line()[:w - 1], curses.A_DIM)
-            prompt = f"{NAME}[{self.board._mode[:4]}]> {self.input}"
-            self.scr.addstr(h - 1, 0, prompt[:w - 1])
-        except curses.error:
-            pass
+        p = self.pane
+
+        self._draw_tabs(w)
+        self._put(1, 0, p.crumb().ljust(w - 1), curses.A_BOLD)
+
+        body_y = 2
+        has_input = p.takes_input
+        has_pad = bool(p.keypad)
+        foot = 1 + (1 if has_input else 0) + (1 if has_pad else 0)   # status + input + keypad
+        body_h = max(3, h - body_y - foot)
+        nav_w = max(20, min(40, w // 3))
+
+        nav = p.nav_items()
+        p.sel = 0 if not nav else max(0, min(p.sel, len(nav) - 1))
+        self._draw_box(body_y, 0, body_h, nav_w, p.nav_title(), nav,
+                       selrow=p.sel if nav else -1, focus=not has_input or not self.input)
+        vlines: List[str] = []
+        for ln in p.view_lines(w - nav_w - 4):
+            vlines.extend(textwrap.wrap(ln, w - nav_w - 6) or [""])
+        # a view that is a live log (Chat) sticks to the tail
+        if isinstance(p, ChatPane):
+            vlines = vlines[-(body_h - 2):]
+        self._draw_box(body_y, nav_w, body_h, w - nav_w, p.view_title(), vlines,
+                       focus=bool(has_input and self.input))
+
+        y = body_y + body_h
+        if has_pad:
+            self._put(y, 0, ("  keypad: " + "  ".join(p.keypad))[:w - 1], curses.A_DIM)
+            y += 1
+        legend = " F1-F4 tab · ↑↓ nav · → open · ← up · ^D quit"
+        st = self.board.status_line()
+        self._put(y, 0, st[:max(0, w - 2 - len(legend))].ljust(
+            max(0, w - 1 - len(legend))), curses.A_DIM)
+        self._put(y, max(0, w - 1 - len(legend)), legend, curses.A_REVERSE)
+        y += 1
+        if has_input:
+            self._put(y, 0, (p.input_hint + self.input)[:w - 1])
         self.scr.refresh()
 
 
