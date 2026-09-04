@@ -158,7 +158,7 @@ class ArchimedesFace:
                 return _supers(f"Solving {pr.expr} for {pr.wrt}: {pr.wrt} = {rhs}.")
 
             if op == "state" and pr.topic:
-                return self._state_topic(pr.topic)
+                return self._state_topic(pr.topic, pr.wrt)
 
             if op == "evaluate" and pr.expr:
                 import sympy as sp                                 # noqa: PLC0415
@@ -170,12 +170,18 @@ class ArchimedesFace:
 
         return None
 
-    def _state_topic(self, topic: str) -> Optional[str]:
+    def _state_topic(self, topic: str, wrt: Optional[str] = None) -> Optional[str]:
         try:
-            from .Maths.researcher import find_by_name           # noqa: PLC0415
-            md = find_by_name(topic)
+            import re                                              # noqa: PLC0415
+            from .Maths.researcher import find_by_name             # noqa: PLC0415
+            base = re.sub(r"\s+(solved|for|rearranged)\s*$", "", topic.strip())
+            # "state the quadratic formula for a" -> the __a decomposed form;
+            # fall back to the base equation if the rearrangement isn't listed
+            md = (find_by_name(f"{base} solved for {wrt}") if wrt else None) \
+                or find_by_name(base)
             if md:
-                return _supers(f"{md.name}: {md.expr}  (source: {md.source}).")
+                src = f"  (source: {md.source})" if md.source else ""
+                return _supers(f"{md.name}: {md.expr}{src}.")
         except Exception:                                          # noqa: BLE001
             pass
         if self.maths_vocab and self.maths_vocab.has(topic.split()[-1]):
