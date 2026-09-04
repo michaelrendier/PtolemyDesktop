@@ -162,3 +162,6 @@ PtolC/ptolemy
 # Simon Singh "The Code Book" CD-ROM — reference material from the author's
 # personal website, kept local for the pycrypt.py port (not ours to redistribute)
 Kryptos/TheCodeBook/cdrom/
+
+# Archimedes granular maths monad — 9MB, regenerable from the corpus
+Archimedes/monad_mathematics.bin

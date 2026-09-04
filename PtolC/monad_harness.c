@@ -128,6 +128,24 @@ int mh_ingest_support(struct Monad_ *m, const mh_support_line *sl)
     return 0;
 }
 
+/* ── TODO (Archimedes) ─────────────────────────────────────────────────────
+ * The Archimedes Face (Python) is a Zork sentence parser over TWO weighted
+ * monad bins: monad3_c.bin (sentence constructions) + monad_mathematics.bin
+ * (granular maths vocabulary). It answers established-maths / physics
+ * questions Ptolemy routes to it — literal operation constructions and
+ * analysis-result communication, no reasoning.
+ *
+ *   1. mh_route_established(const char *question, char *answer, size_t cap)
+ *      — forward the question frame to the Face; relay its literal answer
+ *        (empty => framework maths, Ptolemy keeps it).
+ *   2. mh_parse_mathdef(const char *line, mh_mathdef *out) — parse the
+ *      "MATHDEF v1 | <id> | <category> | <name> | <expr> | <vars> |
+ *       <var:rung;…> | <var:unit;…> | <source>" grammar, the mirror of
+ *      Archimedes/Maths/mathdef.py, so C and the Face share the maths data
+ *      set. Then: incorporate the translator (Archimedes/Maths/mathengine.py)
+ *      into the harness so granular results cross the boundary as MATHDEF.
+ * ──────────────────────────────────────────────────────────────────────── */
+
 /* ── frame loop — TODO ──────────────────────────────────────────────────── */
 struct mh_harness { int in_fd, out_fd; };
 

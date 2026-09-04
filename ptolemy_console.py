@@ -750,8 +750,27 @@ class StitchBoard:
                 self.monad.enabled = True
                 return "(monad attached)"
             return f"(monad {'attached' if self.monad.enabled else 'detached'})"
+        # Archimedes the Professor: established maths/physics, no framework maths.
+        # He answers as a chat bot; Ptolemy relays; no support-harness post.
+        prof = self.answer_established(m)
+        if prof is not None:
+            return prof
         reply, meta = self.monad.say(m)
         return reply
+
+    _archimedes_face = None
+
+    def answer_established(self, question: str) -> Optional[str]:
+        """Route an established-maths question to the Archimedes Face. Returns
+        its literal answer, or None if it needs framework maths / is not maths
+        (Ptolemy keeps it)."""
+        try:
+            if self._archimedes_face is None:
+                from Archimedes.face import ArchimedesFace       # noqa: PLC0415
+                type(self)._archimedes_face = ArchimedesFace()
+            return self._archimedes_face.answer(question)
+        except Exception:                                        # noqa: BLE001
+            return None
 
     def _drain_support(self) -> List[str]:
         out: List[str] = []

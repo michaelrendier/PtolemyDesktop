@@ -1,0 +1,37 @@
+# Archimedes — the supercalculator library.
+# The Face itself is a chat bot; this is the maths corpus + engine it draws on.
+# Install into PtolemyDesktop/.venv .
+
+# ── already present in .venv (listed for completeness / pinning) ────────────
+sympy==1.14.0
+numpy==2.5.2
+scipy==1.18.0
+pandas==3.0.5
+mpmath==1.3.0
+lark==1.3.1
+matplotlib==3.11.1
+networkx==3.6.1
+vispy==0.16.2
+
+# ── add: better number-calculation implementations ────────────────────────
+symengine            # fast C++ core for sympy — large symbolic speedup
+numba                # JIT for the numeric-rung lambdify paths
+gmpy2                # fast bignum / rationals under sympy + mpmath
+numexpr              # fast array-expression eval for table() sweeps
+
+# ── add: an engineer's calculator carries these ──────────────────────────
+pint                 # units
+uncertainties        # error propagation through the formulas
+statsmodels          # regression / time-series for the statistics module
+
+# ── add: GPU / shader compute (OpenGL_SL via Vispy) ──────────────────────
+PyOpenGL
+PyOpenGL_accelerate
+glfw                 # windowless GL backend for headless shader compute
+
+# ── add: neural-network calculations ─────────────────────────────────────
+tensorflow           # Keras 3 ships with TF 2.16+
+keras
+
+# ── explicitly OUT (simulation, not calculation — later, via ArdaQuenta) ──
+# gromacs, lammps, openmm, ase, pyscf, psi4, fenics
