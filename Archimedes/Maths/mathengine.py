@@ -47,7 +47,11 @@ _FUNC_ONLY = {"sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh",
               "factorial", "binomial", "ceiling", "floor", "limit", "Limit",
               "Matrix", "conjugate", "re", "im", "sinc",
               "Integral", "Sum", "Product", "Derivative",
-              "Rational", "Piecewise"}
+              "Rational", "Piecewise",
+              # functions sympy.solve can emit into a rearranged form
+              "LambertW", "RootOf", "CRootOf", "erf", "erfc", "gamma", "zeta",
+              "Heaviside", "DiracDelta", "besselj", "bessely", "Ei", "Si", "Ci",
+              "polylog", "Min", "Max", "arg"}
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
 
 
