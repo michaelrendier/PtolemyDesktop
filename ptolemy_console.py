@@ -1344,10 +1344,7 @@ class PtolemyConsole:
         self.scr = stdscr
         self.board = board
         self.registry = registry
-        self.lines: List[str] = [
-            f"{NAME} — the Ptolemy manager.  F1-F4 / Tab: folder tabs   "
-            f"↑↓: nav   →/Enter: open   ←: up   q: quit",
-            f"  {board.status_line()}", ""]
+        self.lines: List[str] = []        # the Chat transcript, starts clean
         self.input = ""
         self.panes: List[Pane] = [ChatPane(self), ValaQuentaPane(self),
                                   LineagePane(self), ArchimedesPane(self)]
@@ -1408,6 +1405,11 @@ class PtolemyConsole:
         curses.curs_set(1)
         self.scr.nodelay(True)
         self.scr.keypad(True)
+        # never let a bottom-right write scroll the whole screen — that was
+        # stacking the frame into the scrollback every turn
+        self.scr.scrollok(False)
+        self.scr.idlok(False)
+        self.scr.leaveok(False)
         self.board.support.start()
         self.pane.on_show()
         try:
@@ -1501,20 +1503,33 @@ class PtolemyConsole:
         except curses.error:
             pass
 
-    def _draw_tabs(self, w: int) -> None:
-        x = 0
+    def _tab_layout(self, w: int):
+        """(name, x, inner_width, enabled, active) per tab, laid left→right;
+        drops tabs that would overflow the width."""
+        out, x = [], 1
         for i, pn in enumerate(self.panes):
-            cell = f" {pn.name} "
-            if i == self.tab:
-                attr = curses.A_REVERSE | curses.A_BOLD
-            elif pn.enabled:
-                attr = curses.A_BOLD
+            iw = len(pn.name) + 2               # " Name "
+            if x + iw + 2 >= w:
+                break
+            out.append((pn.name, x, iw, pn.enabled, i == self.tab))
+            x += iw + 2                          # + the two corner columns
+        return out
+
+    def _draw_tabs(self, w: int) -> None:
+        """Browser / file-manager folder tabs on rows 0-1: the active tab's
+        bottom is open into the body; the others are sealed under the
+        baseline (they sit 'behind' the content, out of the way)."""
+        self._put(1, 0, "─" * (w - 1), curses.A_DIM)      # the baseline
+        for name, x, iw, enabled, active in self._tab_layout(w):
+            top_attr = curses.A_BOLD if (active or enabled) else curses.A_DIM
+            lbl_attr = (curses.A_REVERSE | curses.A_BOLD) if active else (
+                curses.A_BOLD if enabled else curses.A_DIM)
+            self._put(0, x, "┌" + "─" * iw + "┐", top_attr)
+            self._put(0, x + 1, f" {name} ", lbl_attr)
+            if active:
+                self._put(1, x, "┘" + " " * iw + "└", curses.A_BOLD)
             else:
-                attr = curses.A_DIM
-            self._put(0, x, cell, attr)
-            x += len(cell)
-            self._put(0, x, "│", curses.A_DIM)
-            x += 1
+                self._put(1, x, "┴" + "─" * iw + "┴", curses.A_DIM)
 
     def _draw_box(self, y: int, x: int, bh: int, bw: int, title: str,
                   lines: List[str], selrow: int = -1, focus: bool = False) -> None:
@@ -1539,10 +1554,10 @@ class PtolemyConsole:
         h, w = self.scr.getmaxyx()
         p = self.pane
 
-        self._draw_tabs(w)
-        self._put(1, 0, p.crumb().ljust(w - 1), curses.A_BOLD)
+        self._draw_tabs(w)                            # rows 0-1
+        self._put(2, 0, p.crumb().ljust(w - 1), curses.A_BOLD)   # row 2
 
-        body_y = 2
+        body_y = 3
         has_input = p.takes_input
         has_pad = bool(p.keypad)
         foot = 1 + (1 if has_input else 0) + (1 if has_pad else 0)   # status + input + keypad
@@ -1564,16 +1579,20 @@ class PtolemyConsole:
 
         y = body_y + body_h
         if has_pad:
-            self._put(y, 0, ("  keypad: " + "  ".join(p.keypad))[:w - 1], curses.A_DIM)
+            self._put(y, 0, ("  keypad: " + "  ".join(p.keypad)).ljust(w - 1),
+                      curses.A_DIM)
             y += 1
-        legend = " F1-F4 tab · ↑↓ nav · → open · ← up · ^D quit"
+        legend = " F1-F4 tab · ↑↓ nav · → open · ← up · ^D quit "
         st = self.board.status_line()
-        self._put(y, 0, st[:max(0, w - 2 - len(legend))].ljust(
-            max(0, w - 1 - len(legend))), curses.A_DIM)
+        self._put(y, 0, st.ljust(w - 1), curses.A_DIM)          # clear the row
         self._put(y, max(0, w - 1 - len(legend)), legend, curses.A_REVERSE)
         y += 1
         if has_input:
-            self._put(y, 0, (p.input_hint + self.input)[:w - 1])
+            self._put(y, 0, (p.input_hint + self.input).ljust(w - 1))
+            try:
+                self.scr.move(y, min(w - 2, len(p.input_hint) + len(self.input)))
+            except curses.error:
+                pass
         self.scr.refresh()
 
 
