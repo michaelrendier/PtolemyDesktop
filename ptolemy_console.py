@@ -363,6 +363,60 @@ class MonadLink:
         return self.kind
 
 
+class BoxKiteMonad:
+    """The speaking construction the user calls "nearly flawless" —
+    VAPMIP/rotary_rerun_boxkite_monad.py's RotaryBoxKiteMonad. Heavy import
+    (WordNet + the combined store), so it loads lazily on the first say() and
+    stays resident. Falls back to `nxt` (HarnessMonad / MonadLink) on failure."""
+
+    def __init__(self, nxt: Any) -> None:
+        self._nxt = nxt
+        self._monad = None
+        self._tried = False
+        self.enabled = True
+        self.kind = "rotary_rerun_boxkite (loading on first turn)"
+
+    def _load(self) -> None:
+        if self._tried:
+            return
+        self._tried = True
+        try:
+            import contextlib
+            import io
+            # rotary_rerun_boxkite_monad.py imports its siblings top-level
+            # ("import ptolemy_monad", "from harness import Harness"), so VAPMIP
+            # itself must be on the path and it imports as a top-level module.
+            vp = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "VAPMIP")
+            if vp not in sys.path:
+                sys.path.insert(0, vp)
+            with contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                from rotary_rerun_boxkite_monad import RotaryBoxKiteMonad
+                from harness import Harness
+                self._monad = RotaryBoxKiteMonad(harness=Harness())
+            sig = getattr(getattr(self._monad, "box_kite", None), "signature", "?")
+            self.kind = f"rotary_rerun_boxkite (box-kite sig {sig})"
+        except Exception as e:                                    # noqa: BLE001
+            self.kind = f"rotary_rerun_boxkite unavailable ({type(e).__name__}) → {self._nxt.status()}"
+
+    def say(self, text: str) -> Tuple[str, Dict[str, Any]]:
+        if not self.enabled:
+            return ("(monad detached — harness only)", {"via": "detached"})
+        self._load()
+        if self._monad is not None:
+            try:
+                enc = self._monad.process_input(text, user_id="cody")
+                return (enc.response or "(box-kite returned no words)",
+                        {"via": "boxkite", "direction": enc.direction})
+            except Exception as e:                                # noqa: BLE001
+                return (f"(box-kite error: {type(e).__name__}: {e})", {"via": "error"})
+        return self._nxt.say(text)
+
+    def status(self) -> str:
+        return self.kind
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Harness link — the frame seam to a resident C monad (`ptol -w`)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1643,6 +1697,10 @@ def main() -> int:
             link.send({"t": "attach", "who": "ptolemy_console"})
         except Exception:                                        # noqa: BLE001
             board.harness = None       # link failed -> in-process MonadLink stays
+    # the speaking construction: rotary_rerun_boxkite first, everything else the
+    # fallback chain (harness C console_speak / VAPMIP.Engine / stand-in)
+    board.monad = BoxKiteMonad(board.monad)
+    board.active = ActiveHarness(board.monad)
     curses.wrapper(lambda scr: PtolemyConsole(scr, board, board.registry).run())
     if board.harness is not None:
         try:
