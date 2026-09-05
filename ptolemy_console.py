@@ -21,20 +21,24 @@ PGui side connects over a pty and imports it.
     routes between them.  One object holds information (monad), display
     (console sink) and diagnostics (support) — one monolithic calculation.
 
-Two tabs:
+Tabs (standalone curses):
     THE CHAT TAB       — this window: Ptolemy + the faces + the monad.
-    THE VALAQUENTA TAB — the DerivationBrowser.  ARCHIMEDES runs it (guided
-                         tour / mathematical encyclopedia / supercalculator).
-                         Full stop.
+    THE VALAQUENTA TAB — the DerivationBrowser, loaded directly. Its own tab,
+                         not routed through any face.
+    GENERATIONAL LINEAGE — placeholder until the engine is wired.
+    THE ARCHIMEDES TAB — the maths-catalogue browser. Only present when the
+                         console is EMBEDDED in PtolemyDesktop
+                         (PtolemyConsole(..., embedded=True), or the
+                         PTOLEMY_DESKTOP env var on a spawned subprocess).
+                         Standalone, Archimedes is only the Monad's local
+                         maths worker (answer_established / act), no tab.
 
-The console runs its OWN tabs when standalone.  Installed in PtolemyDesktop it
-is HIBERNATED — `--port` mode, no curses — and the desktop renders the tabs,
-driving the console over the pty.  Archimedes' `run_tab(scr)` is the
-standalone form; `act()` (three modes) is the hibernated form the desktop
-calls.
+Installed in PtolemyDesktop the console can also run HIBERNATED — `--port`
+mode, no curses — with the desktop rendering the tabs and driving the console
+over the pty.
 
 Run:
-    python3 ptolemy_console.py            # standalone curses app (both tabs)
+    python3 ptolemy_console.py            # standalone curses app
     python3 ptolemy_console.py --port     # hibernated: frame protocol, no curses
     python3 ptolemy_console.py --selftest # headless: route a few turns, print
 
@@ -1406,8 +1410,8 @@ class ValaQuentaPane(Pane):
         return "DERIVATION BROWSER"
 
     def view_lines(self, w: int) -> List[str]:
-        return ["Archimedes runs the ValaQuenta tab — the full-screen",
-                "Derivation Browser (its own nav + view + proof panels).",
+        return ["The ValaQuenta engine encyclopedia — the full-screen",
+                "Derivation Browser (its own nav / view / proof panels).",
                 "", "→ or Enter to raise it; q inside returns here."]
 
     def on_activate(self, item: str) -> None:
@@ -1415,14 +1419,20 @@ class ValaQuentaPane(Pane):
 
 
 class PtolemyConsole:
-    def __init__(self, stdscr, board: StitchBoard, registry) -> None:
+    def __init__(self, stdscr, board: StitchBoard, registry,
+                 embedded: bool = False) -> None:
         self.scr = stdscr
         self.board = board
         self.registry = registry
         self.lines: List[str] = []        # the Chat transcript, starts clean
         self.input = ""
+        # ValaQuenta is a first-class tab; Archimedes is only the local maths
+        # worker for the Monad — its browsing Tab appears only when the console
+        # is embedded in PtolemyDesktop.
         self.panes: List[Pane] = [ChatPane(self), ValaQuentaPane(self),
-                                  LineagePane(self), ArchimedesPane(self)]
+                                  LineagePane(self)]
+        if embedded:
+            self.panes.append(ArchimedesPane(self))
         self.tab = 0
 
     @property
@@ -1448,14 +1458,17 @@ class PtolemyConsole:
 
     # ── ValaQuenta full-screen sub-loop (raised to the top) ──────────────
     def _run_derivation_subloop(self) -> None:
-        arch = self.board.support.faces.get("Archimedes")
-        if arch is None or not arch.runs_tab:
-            self._push("(Archimedes has no Derivation Browser)")
+        """Load the ValaQuenta Derivation Browser directly — it is its own
+        tab, not something routed through the Archimedes face."""
+        reg = self.registry or getattr(self.board, "registry", None)
+        if reg is None:
+            self._push("(ValaQuenta registry not available)")
             return
         try:
+            from ValaQuenta.engine.console_curses import DerivationBrowser  # noqa: PLC0415
             self.scr.nodelay(False)
             curses.curs_set(0)
-            arch.run_tab(self.scr)
+            DerivationBrowser(self.scr, reg).run()
         except Exception as e:                                    # noqa: BLE001
             self._push(f"(Derivation Browser error: {type(e).__name__}: {e})")
         finally:
@@ -1867,7 +1880,13 @@ def main() -> int:
     # fallback chain (harness C console_speak / VAPMIP.Engine / stand-in)
     board.monad = BoxKiteMonad(board.monad)
     board.active = ActiveHarness(board.monad)
-    curses.wrapper(lambda scr: PtolemyConsole(scr, board, board.registry).run())
+    # the Archimedes browsing Tab is a PtolemyDesktop-only affordance; a
+    # PtolemyDesktop importer constructs PtolemyConsole(..., embedded=True),
+    # or sets PTOLEMY_DESKTOP when it spawns this as a subprocess.
+    embedded = bool(os.environ.get("PTOLEMY_DESKTOP"))
+    curses.wrapper(
+        lambda scr: PtolemyConsole(scr, board, board.registry,
+                                   embedded=embedded).run())
     if board.harness is not None:
         try:
             board.harness.send({"t": "quit"})
