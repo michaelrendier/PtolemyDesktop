@@ -416,8 +416,15 @@ class BoxKiteMonad:
                 with contextlib.redirect_stdout(io.StringIO()), \
                      contextlib.redirect_stderr(io.StringIO()):
                     enc = self._monad.process_input(text, user_id="cody")
-                return (enc.response or "(box-kite returned no words)",
-                        {"via": "boxkite", "direction": enc.direction})
+                reply = enc.response or "(box-kite returned no words)"
+                # the templated sentence is one of 13 fixed shapes
+                # (direction -> "this is a kind of {}." etc); the actual
+                # selected vocabulary is enc.words_out — show both, so a
+                # repeated template shape doesn't read as a repeated answer.
+                if enc.words_out:
+                    reply += f"   [{enc.direction} · words: {', '.join(enc.words_out)}]"
+                return reply, {"via": "boxkite", "direction": enc.direction,
+                               "words_out": enc.words_out}
             except Exception as e:                                # noqa: BLE001
                 return (f"(box-kite error: {type(e).__name__}: {e})", {"via": "error"})
         return self._nxt.say(text)
@@ -1130,10 +1137,26 @@ class Pane:
     def on_show(self) -> None:                   # this pane raised to the top
         pass
 
+    # presentation — raw nav_items() stay the logical/lookup keys; display()
+    # is what's actually drawn (e.g. humanized titles). Default: identity.
+    def display(self, item: str) -> str:
+        return item
+
+    def is_header(self, item: str) -> bool:
+        """Non-selectable separator row — a blank, a "— label —" (ChatPane),
+        or a "── Label ──" group header (ValaQuenta-style, ArchimedesPane)."""
+        return (not item) or item.startswith("—")
+
     # helper
     def _clamp_sel(self) -> None:
-        n = len(self.nav_items())
+        items = self.nav_items()
+        n = len(items)
         self.sel = 0 if n == 0 else max(0, min(self.sel, n - 1))
+        if items and self.is_header(items[self.sel]):
+            for j, it in enumerate(items):
+                if not self.is_header(it):
+                    self.sel = j
+                    break
 
 
 class ChatPane(Pane):
@@ -1184,6 +1207,19 @@ class ChatPane(Pane):
             self.c._route(text)
 
 
+# category slugs whose plain .replace('_',' ').title() reads wrong
+# (acronyms, ampersands) — everything else humanizes generically.
+_TITLE_OVERRIDES = {
+    "rf_microwave": "RF & Microwave",
+    "qft": "Quantum Field Theory",
+}
+_TIER_ORDER = ("foundations", "physics", "engineering")
+
+
+def _humanize(slug: str) -> str:
+    return _TITLE_OVERRIDES.get(slug, slug.replace("_", " ").title())
+
+
 class ArchimedesPane(Pane):
     name = "Archimedes"
     takes_input = True
@@ -1198,6 +1234,7 @@ class ArchimedesPane(Pane):
         self.detail: List[str] = []
         self._by_cat: Dict[str, list] = {}
         self._pages: Dict[str, dict] = {}
+        self._tier_of: Dict[str, str] = {}     # category slug -> foundations/physics/engineering
         self._face = None
         self._err = ""
 
@@ -1214,6 +1251,10 @@ class ArchimedesPane(Pane):
             self._by_cat = by_category()
             self._pages = pages()
             self._face = ArchimedesFace()
+            for key in self._pages:                # "foundations.algebra" -> tier
+                tier, _, cat = key.partition(".")
+                if cat:
+                    self._tier_of[cat] = tier
         except Exception as e:                                          # noqa: BLE001
             self._err = f"{type(e).__name__}: {e}"
 
@@ -1223,18 +1264,39 @@ class ArchimedesPane(Pane):
     def crumb(self) -> str:
         p = " ⌂ / Archimedes"
         if self.level >= 1 and self.cat:
-            p += f" / {self.cat}"
+            p += f" / {_humanize(self.cat)}"
         return p
 
     def nav_title(self) -> str:
-        return "CATEGORIES" if self.level == 0 else self.cat.upper()
+        return "CATEGORIES" if self.level == 0 else _humanize(self.cat).upper()
+
+    def display(self, item: str) -> str:
+        if self.level == 0 and not self.is_header(item) and item != "..":
+            return _humanize(item)
+        return item                     # headers/".."/equation names are already words
+
+    def is_header(self, item: str) -> bool:
+        return super().is_header(item) or item.startswith("── ")
 
     def nav_items(self) -> List[str]:
         self._load()
         if self._err:
             return ["(formulary unavailable)"]
         if self.level == 0:
-            return sorted(self._by_cat)
+            rows: List[str] = []
+            seen: set = set()
+            for tier in _TIER_ORDER:
+                cats = sorted(c for c in self._by_cat if self._tier_of.get(c) == tier)
+                if not cats:
+                    continue
+                rows.append(f"── {_humanize(tier)} ──")
+                rows.extend(cats)
+                seen.update(cats)
+            leftover = sorted(c for c in self._by_cat if c not in seen)
+            if leftover:
+                rows.append("── Other ──")
+                rows.extend(leftover)
+            return rows
         rows = [".."]
         rows += [md.name for md in self._by_cat.get(self.cat, [])]
         return rows
@@ -1252,10 +1314,12 @@ class ArchimedesPane(Pane):
         if not items:
             return []
         cur = items[min(self.sel, len(items) - 1)]
+        if self.is_header(cur):
+            return ["(select a category below)"]
         if self.level == 0:
             pg = next((v for k, v in self._pages.items() if k.endswith(cur)), {})
             defs = self._by_cat.get(cur, [])
-            out = [pg.get("title", cur), ""]
+            out = [pg.get("title") or _humanize(cur), ""]
             if pg.get("blurb"):
                 out += textwrap.wrap(pg["blurb"], max(20, w - 2)) + [""]
             out.append(f"{len(defs)} formulae — → to open the list")
@@ -1282,6 +1346,8 @@ class ArchimedesPane(Pane):
         self.detail = out
 
     def on_activate(self, item: str) -> None:
+        if self.is_header(item):
+            return
         self.detail = []
         if self._err:
             return
@@ -1409,6 +1475,26 @@ class PtolemyConsole:
         self.pane._clamp_sel()
         self.pane.on_show()
 
+    def _step_sel(self, p: Pane, delta: int) -> None:
+        """Move p.sel by one row in `delta`'s direction, skipping header
+        rows (they're not selectable). Stops at the array edge rather than
+        landing on a header there."""
+        items = p.nav_items()
+        n = len(items)
+        if n == 0:
+            return
+        i = p.sel
+        while 0 <= i + delta < n:
+            i += delta
+            if not p.is_header(items[i]):
+                p.sel = i
+                return
+        if p.is_header(items[p.sel]):          # started on one — snap off it
+            for j, it in enumerate(items):
+                if not p.is_header(it):
+                    p.sel = j
+                    return
+
     # ── main loop ───────────────────────────────────────────────────────
     def run(self) -> None:
         curses.curs_set(1)
@@ -1446,9 +1532,9 @@ class PtolemyConsole:
                 elif k == 4:                                    # Ctrl-D
                     break
                 elif k in (curses.KEY_UP,):
-                    p.sel = max(0, p.sel - 1)
+                    self._step_sel(p, -1)
                 elif k in (curses.KEY_DOWN,):
-                    p.sel = min(max(0, len(p.nav_items()) - 1), p.sel + 1)
+                    self._step_sel(p, 1)
                 elif k in (curses.KEY_LEFT,):
                     p.on_back()
                 elif k in (curses.KEY_RIGHT,):
@@ -1543,22 +1629,46 @@ class PtolemyConsole:
                 self._put(1, x, "┴" + "─" * iw + "┴", curses.A_DIM)
 
     def _draw_box(self, y: int, x: int, bh: int, bw: int, title: str,
-                  lines: List[str], selrow: int = -1, focus: bool = False) -> None:
+                  lines: List[str], selrow: int = -1, focus: bool = False,
+                  header_rows: Optional[set] = None) -> None:
+        """A titled, bordered box. Each logical row in `lines` is word-wrapped
+        to fit; a wrapped CONTINUATION line gets one extra space of indent
+        (3 vs 2) so it reads as "more of the row above", never confused with
+        a logical sub-label's own 2-space indent (that's in the row's text,
+        not this rendering offset). `header_rows` marks logical indices that
+        are separators — dim, never selection-highlighted, whole row spans."""
+        header_rows = header_rows or set()
         tattr = curses.A_BOLD if focus else curses.A_DIM
         self._put(y, x, ("┌─ " + title + " ").ljust(bw - 1, "─") + "┐", tattr)
         for r in range(1, bh - 1):
             self._put(y + r, x, "│", curses.A_DIM)
             self._put(y + r, x + bw - 1, "│", curses.A_DIM)
         self._put(y + bh - 1, x, "└".ljust(bw - 1, "─") + "┘", curses.A_DIM)
+
         inner_h = bh - 2
+        content_w = max(1, bw - 4)
+        cont_w = max(1, content_w - 1)
+
+        # logical rows -> physical display rows (word-wrapped)
+        phys: List[Tuple[str, int, bool]] = []      # (text, logical_idx, is_continuation)
+        for li, ln in enumerate(lines):
+            for wi, seg in enumerate(textwrap.wrap(ln, content_w) or [""]):
+                phys.append((seg, li, wi > 0))
+
+        # scroll so the selected logical row's FIRST physical line is visible
+        sel_phys = next((i for i, ph in enumerate(phys) if ph[1] == selrow), 0)
         top = 0
-        if selrow >= inner_h:
-            top = selrow - inner_h + 1
-        for r, ln in enumerate(lines[top:top + inner_h]):
+        if sel_phys >= inner_h:
+            top = sel_phys - inner_h + 1
+
+        for r, (seg, li, is_cont) in enumerate(phys[top:top + inner_h]):
             attr = 0
-            if top + r == selrow:
+            if li in header_rows:
+                attr = curses.A_BOLD | curses.A_DIM
+            elif li == selrow:
                 attr = curses.A_REVERSE | (curses.A_BOLD if focus else 0)
-            self._put(y + 1 + r, x + 2, ln[:bw - 4].ljust(bw - 4), attr)
+            indent, width = (3, cont_w) if is_cont else (2, content_w)
+            self._put(y + 1 + r, x + indent, seg[:width].ljust(width), attr)
 
     INPUT_BAND = 7   # 5 content lines + 2 borders — ALWAYS reserved when a pane
                      # takes input, so growing/shrinking never moves anything
@@ -1583,9 +1693,12 @@ class PtolemyConsole:
         nav_w = max(20, min(40, w // 3))
 
         nav = p.nav_items()
-        p.sel = 0 if not nav else max(0, min(p.sel, len(nav) - 1))
-        self._draw_box(body_y, 0, body_h, nav_w, p.nav_title(), nav,
-                       selrow=p.sel if nav else -1, focus=not has_input or not self.input)
+        p._clamp_sel()
+        nav_disp = [p.display(it) for it in nav]
+        nav_headers = {i for i, it in enumerate(nav) if p.is_header(it)}
+        self._draw_box(body_y, 0, body_h, nav_w, p.nav_title(), nav_disp,
+                       selrow=p.sel if nav else -1, focus=not has_input or not self.input,
+                       header_rows=nav_headers)
         vlines: List[str] = []
         for ln in p.view_lines(w - nav_w - 4):
             vlines.extend(textwrap.wrap(ln, w - nav_w - 6) or [""])
