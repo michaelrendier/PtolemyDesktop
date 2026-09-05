@@ -1470,6 +1470,8 @@ class PtolemyConsole:
                         self.input = self.input[:-1]
                 elif 32 <= k < 127 and p.takes_input:
                     self.input += chr(k)
+        except KeyboardInterrupt:
+            pass                        # Ctrl-C quits like q / Ctrl-D, no traceback
         finally:
             self.board.support.stop()
 
@@ -1762,4 +1764,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:      # belt-and-suspenders for the tiny window
+        sys.exit(130)              # before run()'s own try/except is armed
