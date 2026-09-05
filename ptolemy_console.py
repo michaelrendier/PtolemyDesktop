@@ -406,7 +406,16 @@ class BoxKiteMonad:
         self._load()
         if self._monad is not None:
             try:
-                enc = self._monad.process_input(text, user_id="cody")
+                # Harness.present() falls back to a plain print() when no
+                # 'viewport' Face is registered (none is, here) — under
+                # curses raw mode that print lands straight on the terminal
+                # at wherever the cursor sits (the input line), corrupting
+                # the screen. Swallow it; enc.response is the real answer.
+                import contextlib
+                import io
+                with contextlib.redirect_stdout(io.StringIO()), \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    enc = self._monad.process_input(text, user_id="cody")
                 return (enc.response or "(box-kite returned no words)",
                         {"via": "boxkite", "direction": enc.direction})
             except Exception as e:                                # noqa: BLE001
@@ -1549,6 +1558,11 @@ class PtolemyConsole:
                 attr = curses.A_REVERSE | (curses.A_BOLD if focus else 0)
             self._put(y + 1 + r, x + 2, ln[:bw - 4].ljust(bw - 4), attr)
 
+    INPUT_BAND = 7   # 5 content lines + 2 borders — ALWAYS reserved when a pane
+                     # takes input, so growing/shrinking never moves anything
+                     # else (the NES-viewport rule: the window is fixed, the
+                     # text map scrolls inside it).
+
     def _draw(self) -> None:
         self.scr.erase()
         h, w = self.scr.getmaxyx()
@@ -1560,7 +1574,9 @@ class PtolemyConsole:
         body_y = 3
         has_input = p.takes_input
         has_pad = bool(p.keypad)
-        foot = 1 + (1 if has_input else 0) + (1 if has_pad else 0)   # status + input + keypad
+        # status + input-band + keypad — fixed sizes regardless of content,
+        # so the nav/view boxes never resize as the user types
+        foot = 1 + (self.INPUT_BAND if has_input else 0) + (1 if has_pad else 0)
         body_h = max(3, h - body_y - foot)
         nav_w = max(20, min(40, w // 3))
 
@@ -1588,12 +1604,28 @@ class PtolemyConsole:
         self._put(y, max(0, w - 1 - len(legend)), legend, curses.A_REVERSE)
         y += 1
         if has_input:
-            self._put(y, 0, (p.input_hint + self.input).ljust(w - 1))
-            try:
-                self.scr.move(y, min(w - 2, len(p.input_hint) + len(self.input)))
-            except curses.error:
-                pass
+            self._draw_input_band(y, w, p)
         self.scr.refresh()
+
+    def _draw_input_band(self, y_top: int, w: int, p: Pane) -> None:
+        """The growing input box, Claude-Code style: 1 line normally, up to 5
+        of wrapped text — a VIEWPORT (past 5 it shows the tail, where the
+        cursor is, not the head). Anchored to the bottom of the fixed
+        INPUT_BAND, so it only ever grows into blank space already reserved
+        above it; nothing else on screen moves."""
+        inner_w = max(4, w - 5)
+        raw_lines = textwrap.wrap(self.input, inner_w) or [""]
+        visible_n = min(5, len(raw_lines))
+        view = raw_lines[-visible_n:]                     # the viewport: the tail
+        box_h = visible_n + 2
+        box_top = y_top + (self.INPUT_BAND - box_h)       # bottom stays fixed
+        title = p.input_hint.strip() or "input"
+        self._draw_box(box_top, 0, box_h, w - 1, title, view, selrow=-1, focus=True)
+        try:
+            last = view[-1] if view else ""
+            self.scr.move(box_top + box_h - 2, min(w - 3, 2 + len(last)))
+        except curses.error:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
