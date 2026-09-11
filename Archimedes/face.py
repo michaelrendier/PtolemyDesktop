@@ -184,11 +184,21 @@ class ArchimedesFace:
                 return _supers(f"{md.name}: {md.expr}{src}.")
         except Exception:                                          # noqa: BLE001
             pass
-        if self.maths_vocab and self.maths_vocab.has(topic.split()[-1]):
-            near = self.maths_vocab.nearest(topic.split()[-1])
-            return (f"'{topic}' is in the maths vocabulary "
-                    f"(related terms: {', '.join(near[:4])}). "
-                    f"The named-formula catalogue is not built yet.")
+        # No catalogued formula -> None, Ptolemy keeps it (the file's own
+        # stated contract). There WAS a fallback here that flagged a topic
+        # as "in the maths vocabulary" whenever the LAST WORD of the topic
+        # matched anywhere in the 9MB scraped monad_mathematics.bin corpus —
+        # far too weak a bar (arXiv text mentions "internet", "color",
+        # nearly any noun) to gate real conversation into a dead-end
+        # placeholder ("the named-formula catalogue is not built yet")
+        # instead of falling through to Ptolemy. Confirmed live: "what are
+        # you watching on the internet?" and "what is your favorite
+        # color?" were both hijacked this way, because OPERATION_VERBS
+        # also aliases bare "what" to "state" (parser.py) — every "what
+        # ...?" question reaches here. Removed rather than tightened: a
+        # last-word corpus hit is not evidence of anything, and the
+        # catalogue this was meant to gate ("named-formula catalogue")
+        # does not exist yet regardless.
         return None
 
 

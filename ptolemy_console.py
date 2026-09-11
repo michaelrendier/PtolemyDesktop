@@ -399,8 +399,23 @@ class BoxKiteMonad:
                 from rotary_rerun_boxkite_monad import RotaryBoxKiteMonad
                 from harness import Harness
                 self._monad = RotaryBoxKiteMonad(harness=Harness())
+                # Swap the template placeholder (assemble_sentence: 11 fixed
+                # "it is part of {word}." shapes, no grammar check) for the
+                # real creator (VerbNet sails + WordNet-closure fill + the
+                # invariant SELRESTR gate) — permanently, for this resident
+                # process. Does NOT edit rotary_rerun_boxkite_monad.py
+                # itself (modify-don't-rewrite; see engine/grammar/
+                # rotary_bridge.py's own docstring). A failed import just
+                # leaves the template in place — not fatal to the Chat tab.
+                creator_on = False
+                try:
+                    from engine.grammar import rotary_bridge
+                    creator_on = rotary_bridge.install()
+                except Exception:                                    # noqa: BLE001
+                    pass
             sig = getattr(getattr(self._monad, "box_kite", None), "signature", "?")
-            self.kind = f"rotary_rerun_boxkite (box-kite sig {sig})"
+            voice = "creator" if creator_on else "template"
+            self.kind = f"rotary_rerun_boxkite (box-kite sig {sig}, voice:{voice})"
         except Exception as e:                                    # noqa: BLE001
             self.kind = f"rotary_rerun_boxkite unavailable ({type(e).__name__}) → {self._nxt.status()}"
 
