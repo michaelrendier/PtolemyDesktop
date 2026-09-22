@@ -210,6 +210,12 @@ Hexagon NPU (45 TOPS on-device inference)
 
 ## LuthSpell / LSH — Stub Hooks Needing Real Implementation
 
+- [ ] The monad/bus gets a **"now" frame of reference** — a block of memory
+      that is always live and can be navigated (not just appended-to/replayed
+      like the cyclic context buffer; a present-tense window with its own
+      addressable position, separate from the archive). Where this should
+      seat relative to `PtolBus` / `cyclic_context_buffer.py` and R̂/B̂=R̂† is
+      still open — noted here to not lose the idea, not yet designed.
 - [ ] `HaltingMonitor._evaluate()` — stub → real inference coord evaluation
 - [ ] `PtolBusStub` → real `PtolBus` with queue + rotary semaphore
 - [ ] Blockchain backend for halt record commits
