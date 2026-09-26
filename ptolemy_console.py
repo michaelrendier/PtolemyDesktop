@@ -537,51 +537,175 @@ class NineteenDMonadAdapter:
     def say(self, text: str) -> Tuple[str, Dict[str, Any]]:
         if not self.enabled:
             return ("(monad detached — harness only)", {"via": "detached"})
+        result = build_encounter_19d(text, self._m19, self._pm, self._monad,
+                                     self._DIRECTION_TO_SPEECH_ACT)
+        if result.encounter is None:
+            return result.message, result.meta
+        enc, direction = result.encounter, result.direction
+        reply = (f"{enc.surface}  [direction:{direction} verdict:{enc.verdict} "
+                 f"licensed:{enc.licensed}]")
+        return reply, {"via": "19D", "direction": direction,
+                      "verdict": enc.verdict, "licensed": enc.licensed}
+
+    def status(self) -> str:
+        return self.kind
+
+
+@dataclass
+class _EncounterResult:
+    """Success XOR honest failure -- never both, never neither. `message`/
+    `meta` are always set (even on success, for logging); `encounter`/
+    `direction` are None unless a real sentence was actually produced.
+    Failures stay in the code (Cody, 2026-09-26) -- returned, not
+    swallowed, so every caller sees exactly why nothing was generated."""
+    encounter: Any = None
+    direction: Optional[str] = None
+    message: str = ""
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+
+def build_encounter_19d(text: str, m19_mod: Any, pm_mod: Any, monad_obj: Any,
+                        direction_map: Dict[str, str]) -> "_EncounterResult":
+    """Shared, null-first ParseSpec construction — used by both
+    NineteenDMonadAdapter and ScaledMindEyeMonadAdapter so the same real
+    derivation isn't duplicated. Every field of the ParseSpec this builds
+    is genuinely resolved from `text` or the call honestly fails/nulls;
+    nothing here is a fabricated default."""
+    try:
+        from nltk.corpus import wordnet as wn                     # noqa: PLC0415
+        words = [w.strip(".,!?;:'\"").lower() for w in text.split()]
+        words = [w for w in words if w]
+
+        verb = None
+        for w in words:
+            if wn.synsets(w, pos=wn.VERB):
+                verb = w
+                break
+        leaves = [w for w in words if w != verb and wn.synsets(w)]
+
+        if verb is None or not leaves:
+            return _EncounterResult(
+                message=(f"(19D: nothing resolved — no WordNet verb"
+                         f"{'' if verb else ' found'}, "
+                         f"{len(leaves)} content word(s) resolved. NULL, "
+                         f"not fabricated — no sentence generated.)"),
+                meta={"via": "19D_null", "verb": verb, "leaves": leaves})
+
+        ctx = monad_obj._eye_obj.create_context(leaves)
+        direction = pm_mod.infer_direction(ctx.root_vector)
+        if direction == "observe":
+            return _EncounterResult(
+                message=(f"(19D: context created ({len(leaves)} leaves) but "
+                         f"root vector gave no dominant signal — 'observe', "
+                         f"uncommitted, not fabricated into a sentence.)"),
+                meta={"via": "19D_observe", "leaves": leaves})
+
+        speech_act = direction_map.get(direction)
+        if speech_act is None:
+            return _EncounterResult(
+                message=(f"(19D: direction={direction!r} has no speech_act "
+                         f"mapping yet — reporting the real finding rather "
+                         f"than forcing one: leaves={leaves})"),
+                meta={"via": "19D_unmapped", "direction": direction})
+
+        spec = m19_mod.ParseSpec(speech_act=speech_act, verb=verb,
+                                 subject_hint=leaves[0] if leaves else None,
+                                 topic_lemmas=leaves)
+        enc = monad_obj.process_input(spec)
+        return _EncounterResult(encounter=enc, direction=direction,
+                                meta={"via": "19D", "direction": direction})
+    except Exception as e:                                        # noqa: BLE001
+        return _EncounterResult(message=f"(19D error: {type(e).__name__}: {e})",
+                                meta={"via": "error"})
+
+
+class ScaledMindEyeMonadAdapter:
+    """Real conversational wiring for scaled_mind_eye_boxkite_kernel_monad's
+    MindEyeBoxKiteKernel (Cody, 2026-09-26). Reuses the same real 19D
+    sentence construction as NineteenDMonadAdapter (build_encounter_19d,
+    shared not duplicated) for the actual English, then ADDS what this
+    kernel specifically contributes and nothing else has: a real hub-
+    anchored fiber throw for the sentence's main ring, matching Phase 39's
+    own documented design ("one hub-anchored fiber per grammatical slot") —
+    realized here for the main ring only; per-slot fiber throws for every
+    sub-ring are a real, honest next step, not yet built, not claimed."""
+
+    _DIRECTION_TO_SPEECH_ACT = NineteenDMonadAdapter._DIRECTION_TO_SPEECH_ACT
+
+    def __init__(self) -> None:
+        vp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VAPMIP")
+        if vp not in sys.path:
+            sys.path.insert(0, vp)
+        import importlib
+        self._m19 = importlib.import_module("19D_rotary_boxkite_monad")
+        self._pm = importlib.import_module("ptolemy_monad")
+        self._sme = importlib.import_module("scaled_mind_eye_boxkite_kernel_monad")
+        self._monad = self._m19.RotaryBoxKite19D()
+        self._kernel = self._sme.MindEyeBoxKiteKernel()
+        self.kind = "scaled_mind_eye_boxkite_kernel_monad (real, wired 2026-09-26)"
+        self.enabled = True
+
+    def say(self, text: str) -> Tuple[str, Dict[str, Any]]:
+        if not self.enabled:
+            return ("(monad detached — harness only)", {"via": "detached"})
+        result = build_encounter_19d(text, self._m19, self._pm, self._monad,
+                                     self._DIRECTION_TO_SPEECH_ACT)
+        if result.encounter is None:
+            return result.message, result.meta
+        enc, direction = result.encounter, result.direction
         try:
-            from nltk.corpus import wordnet as wn                # noqa: PLC0415
-            words = [w.strip(".,!?;:'\"").lower() for w in text.split()]
-            words = [w for w in words if w]
-
-            verb = None
-            for w in words:
-                if wn.synsets(w, pos=wn.VERB):
-                    verb = w
-                    break
-
-            leaves = [w for w in words if w != verb and wn.synsets(w)]
-
-            if verb is None or not leaves:
-                return (f"(19D: nothing resolved — no WordNet verb"
-                        f"{'' if verb else ' found'}, "
-                        f"{len(leaves)} content word(s) resolved. NULL, "
-                        f"not fabricated — no sentence generated.)",
-                        {"via": "19D_null", "verb": verb, "leaves": leaves})
-
-            ctx = self._monad._eye_obj.create_context(leaves)
-            direction = self._pm.infer_direction(ctx.root_vector)
-            if direction == "observe":
-                return (f"(19D: context created ({len(leaves)} leaves) but "
-                        f"root vector gave no dominant signal — 'observe', "
-                        f"uncommitted, not fabricated into a sentence.)",
-                        {"via": "19D_observe", "leaves": leaves})
-
-            speech_act = self._DIRECTION_TO_SPEECH_ACT.get(direction)
-            if speech_act is None:
-                return (f"(19D: direction={direction!r} has no speech_act "
-                        f"mapping yet — reporting the real finding rather "
-                        f"than forcing one: leaves={leaves})",
-                        {"via": "19D_unmapped", "direction": direction})
-
-            spec = self._m19.ParseSpec(speech_act=speech_act, verb=verb,
-                                       subject_hint=leaves[0] if leaves else None,
-                                       topic_lemmas=leaves)
-            enc = self._monad.process_input(spec)
+            strut = (enc.ring_code % 7) + 1
+            throw = self._kernel.throw_fiber(strut)
             reply = (f"{enc.surface}  [direction:{direction} verdict:{enc.verdict} "
-                     f"licensed:{enc.licensed}]")
-            return reply, {"via": "19D", "direction": direction,
-                          "verdict": enc.verdict, "licensed": enc.licensed}
+                     f"licensed:{enc.licensed}] "
+                     f"[hub fiber: strut={strut} "
+                     f"fixed_point_weight={throw.fixed_point_weight:.4f} "
+                     f"is_zero_divisor={throw.is_zero_divisor}]")
+            return reply, {"via": "scaled_mind_eye", "direction": direction,
+                          "strut": strut, "verdict": enc.verdict}
         except Exception as e:                                    # noqa: BLE001
-            return (f"(19D error: {type(e).__name__}: {e})", {"via": "error"})
+            return (f"(scaled_mind_eye fiber error: {type(e).__name__}: {e} — "
+                    f"sentence was real, hub throw failed: {enc.surface!r})",
+                    {"via": "error_partial"})
+
+    def status(self) -> str:
+        return self.kind
+
+
+class GenerateMonadAdapter:
+    """Generic adapter for classes exposing generate(prompt) instead of
+    say(text) -- monad.py's Engine and MonadInterface (the historical line
+    MonadLink already wraps, exposed here so it's explicitly selectable by
+    name too, per Cody 2026-09-26: "the historical monads clear back to
+    monad.py usable by the console window"). Real output, no fabrication —
+    generate()'s own return value is reported as-is."""
+
+    def __init__(self, obj: Any, kind: str) -> None:
+        self._obj = obj
+        self.kind = kind
+        self.enabled = True
+
+    def say(self, text: str) -> Tuple[str, Dict[str, Any]]:
+        if not self.enabled:
+            return ("(monad detached — harness only)", {"via": "detached"})
+        try:
+            out = self._obj.generate(text)
+            if isinstance(out, dict):
+                # Real key varies by module (monad.py's Engine uses
+                # 'response', not 'text') -- checked against actual output,
+                # not assumed; fall back to the whole dict, honestly, rather
+                # than silently pick the wrong key and hide the real shape.
+                for key in ("text", "response", "reply", "output"):
+                    if key in out:
+                        reply = str(out[key])
+                        break
+                else:
+                    reply = str(out)
+            else:
+                reply = str(out)
+            return reply, {"via": "generate", "raw": out if isinstance(out, dict) else None}
+        except Exception as e:                                    # noqa: BLE001
+            return (f"(monad error: {type(e).__name__}: {e})", {"via": "error"})
 
     def status(self) -> str:
         return self.kind
@@ -590,11 +714,15 @@ class NineteenDMonadAdapter:
 def load_monad_by_name(name: str, nxt: Any) -> Any:
     """Import one discovered monad module and wrap it honestly. Tries, in
     order: RotaryBoxKiteMonad (the existing BoxKiteMonad path),
-    19D_rotary_boxkite_monad (NineteenDMonadAdapter), any class exposing
-    its own say(), then MindEyeBoxKiteKernel-style structural objects via
-    KernelMonadAdapter. Raises on failure — callers report it, never
-    silently fall back, so a bad switch is never mistaken for a working
-    one."""
+    19D_rotary_boxkite_monad / scaled_mind_eye_boxkite_kernel_monad (their
+    own real adapters), any class exposing its own say(), any class
+    exposing generate() (GenerateMonadAdapter — monad.py's historical
+    Engine/MonadInterface line), then MindEyeBoxKiteKernel-style structural
+    objects via KernelMonadAdapter as the last, most generic resort.
+    Raises on failure — callers report it, never silently fall back, so a
+    bad switch is never mistaken for a working one (failures stay in the
+    code, Cody 2026-09-26 — this function's job is to surface exactly why
+    a monad isn't usable, not to hide it)."""
     vp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VAPMIP")
     if vp not in sys.path:
         sys.path.insert(0, vp)
@@ -607,6 +735,9 @@ def load_monad_by_name(name: str, nxt: Any) -> Any:
     if name == "19D_rotary_boxkite_monad" and hasattr(mod, "RotaryBoxKite19D"):
         return NineteenDMonadAdapter()
 
+    if name == "scaled_mind_eye_boxkite_kernel_monad" and hasattr(mod, "MindEyeBoxKiteKernel"):
+        return ScaledMindEyeMonadAdapter()
+
     for attr_name in dir(mod):
         obj = getattr(mod, attr_name)
         if isinstance(obj, type) and hasattr(obj, "say") and attr_name != "BoxKiteMonad":
@@ -615,11 +746,19 @@ def load_monad_by_name(name: str, nxt: Any) -> Any:
             except TypeError:
                 continue
 
+    for attr_name in dir(mod):
+        obj = getattr(mod, attr_name)
+        if isinstance(obj, type) and hasattr(obj, "generate"):
+            try:
+                return GenerateMonadAdapter(obj(), f"{name}.{attr_name} (generate)")
+            except TypeError:
+                continue
+
     if hasattr(mod, "MindEyeBoxKiteKernel"):
         return KernelMonadAdapter(mod.MindEyeBoxKiteKernel(), f"{name} (structural probe)")
 
     raise ImportError(f"{name!r} has no recognised chat interface (no say(), "
-                      f"no known structural adapter)")
+                      f"no generate(), no known structural adapter)")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
