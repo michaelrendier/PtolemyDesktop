@@ -52,6 +52,7 @@ import argparse
 import curses
 import difflib
 import fnmatch
+import glob
 import os
 import pathlib
 import queue
@@ -452,6 +453,175 @@ class BoxKiteMonad:
         return self.kind
 
 
+def discover_monads() -> List[str]:
+    """Procedural, filesystem-driven — never a hardcoded list. Every `/monad
+    use` candidate comes from what's actually sitting in VAPMIP right now,
+    so a new monad file becomes selectable the moment it exists, and this
+    never again silently launches whichever one happened to get wired in
+    last (the `rotary_rerun_boxkite_monad` staleness this was built to fix)."""
+    vp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VAPMIP")
+    hits = glob.glob(os.path.join(vp, "*monad*.py"))
+    names = sorted(os.path.splitext(os.path.basename(h))[0] for h in hits
+                   if not os.path.basename(h).startswith("_"))
+    return names
+
+
+class KernelMonadAdapter:
+    """Honest adapter for monad modules that expose real box-kite structure
+    but no conversational say() (e.g. scaled_mind_eye_boxkite_kernel_monad's
+    MindEyeBoxKiteKernel — hub_report()/throw_fiber(strut), not chat).
+
+    Does NOT fabricate natural-language generation over that structure.
+    Maps the input deterministically to a strut (sum of char codes mod 7,
+    +1) and reports the real fixed_point_weight / is_zero_divisor /
+    windspeed reading for that throw, labelled plainly as a structural
+    probe. If a wrapped object turns out to have its own say(), that's
+    used directly instead and this adapter is transparent."""
+
+    def __init__(self, obj: Any, kind: str) -> None:
+        self._obj = obj
+        self.kind = kind
+        self.enabled = True
+
+    def say(self, text: str) -> Tuple[str, Dict[str, Any]]:
+        if not self.enabled:
+            return ("(monad detached — harness only)", {"via": "detached"})
+        if hasattr(self._obj, "say"):
+            return self._obj.say(text)
+        try:
+            strut = (sum(ord(c) for c in text) % 7) + 1
+            throw = self._obj.throw_fiber(strut)
+            reply = (f"[structural probe, not chat — {self.kind}] "
+                     f"strut={strut} fixed_point_weight={throw.fixed_point_weight:.4f} "
+                     f"is_zero_divisor={throw.is_zero_divisor}")
+            return reply, {"via": "structural_probe", "strut": strut}
+        except Exception as e:                                   # noqa: BLE001
+            return (f"(monad error: {type(e).__name__}: {e})", {"via": "error"})
+
+    def status(self) -> str:
+        return self.kind
+
+
+class NineteenDMonadAdapter:
+    """Real adapter for 19D_rotary_boxkite_monad.RotaryBoxKite19D — wired
+    properly, not stubbed, per Cody's ruling 2026-09-26: "ensure nothing is
+    defined at first...NULL...none." Every field of the ParseSpec this
+    builds starts undefined and is filled ONLY by what the input genuinely
+    resolves to. No fabricated verb, no fabricated subject, no fabricated
+    speech_act. If nothing resolves, that's reported honestly and no
+    sentence is generated — the same philosophy already coded into
+    ptolemy_monad.infer_direction: "No dominant signal returns 'observe',
+    not an error: a valid direction, just an uncommitted one." Reused here,
+    not reinvented; the direction->speech_act mapping below is new (the
+    two vocabularies don't otherwise overlap) and is exactly as much
+    definition as this needed, no more.
+    """
+
+    _DIRECTION_TO_SPEECH_ACT = {
+        "classify": "define_X", "enumerate": "define_X",
+        "decompose": "how", "situate": "where",
+        "characterize": "define_X", "explain": "why", "imply": "why",
+    }
+
+    def __init__(self) -> None:
+        vp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VAPMIP")
+        if vp not in sys.path:
+            sys.path.insert(0, vp)
+        import importlib
+        self._m19 = importlib.import_module("19D_rotary_boxkite_monad")
+        self._pm = importlib.import_module("ptolemy_monad")
+        self._monad = self._m19.RotaryBoxKite19D()
+        self.kind = "19D_rotary_boxkite_monad (real, wired 2026-09-26)"
+        self.enabled = True
+
+    def say(self, text: str) -> Tuple[str, Dict[str, Any]]:
+        if not self.enabled:
+            return ("(monad detached — harness only)", {"via": "detached"})
+        try:
+            from nltk.corpus import wordnet as wn                # noqa: PLC0415
+            words = [w.strip(".,!?;:'\"").lower() for w in text.split()]
+            words = [w for w in words if w]
+
+            verb = None
+            for w in words:
+                if wn.synsets(w, pos=wn.VERB):
+                    verb = w
+                    break
+
+            leaves = [w for w in words if w != verb and wn.synsets(w)]
+
+            if verb is None or not leaves:
+                return (f"(19D: nothing resolved — no WordNet verb"
+                        f"{'' if verb else ' found'}, "
+                        f"{len(leaves)} content word(s) resolved. NULL, "
+                        f"not fabricated — no sentence generated.)",
+                        {"via": "19D_null", "verb": verb, "leaves": leaves})
+
+            ctx = self._monad._eye_obj.create_context(leaves)
+            direction = self._pm.infer_direction(ctx.root_vector)
+            if direction == "observe":
+                return (f"(19D: context created ({len(leaves)} leaves) but "
+                        f"root vector gave no dominant signal — 'observe', "
+                        f"uncommitted, not fabricated into a sentence.)",
+                        {"via": "19D_observe", "leaves": leaves})
+
+            speech_act = self._DIRECTION_TO_SPEECH_ACT.get(direction)
+            if speech_act is None:
+                return (f"(19D: direction={direction!r} has no speech_act "
+                        f"mapping yet — reporting the real finding rather "
+                        f"than forcing one: leaves={leaves})",
+                        {"via": "19D_unmapped", "direction": direction})
+
+            spec = self._m19.ParseSpec(speech_act=speech_act, verb=verb,
+                                       subject_hint=leaves[0] if leaves else None,
+                                       topic_lemmas=leaves)
+            enc = self._monad.process_input(spec)
+            reply = (f"{enc.surface}  [direction:{direction} verdict:{enc.verdict} "
+                     f"licensed:{enc.licensed}]")
+            return reply, {"via": "19D", "direction": direction,
+                          "verdict": enc.verdict, "licensed": enc.licensed}
+        except Exception as e:                                    # noqa: BLE001
+            return (f"(19D error: {type(e).__name__}: {e})", {"via": "error"})
+
+    def status(self) -> str:
+        return self.kind
+
+
+def load_monad_by_name(name: str, nxt: Any) -> Any:
+    """Import one discovered monad module and wrap it honestly. Tries, in
+    order: RotaryBoxKiteMonad (the existing BoxKiteMonad path),
+    19D_rotary_boxkite_monad (NineteenDMonadAdapter), any class exposing
+    its own say(), then MindEyeBoxKiteKernel-style structural objects via
+    KernelMonadAdapter. Raises on failure — callers report it, never
+    silently fall back, so a bad switch is never mistaken for a working
+    one."""
+    vp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VAPMIP")
+    if vp not in sys.path:
+        sys.path.insert(0, vp)
+    import importlib
+    mod = importlib.import_module(name)
+
+    if hasattr(mod, "RotaryBoxKiteMonad"):
+        return BoxKiteMonad(nxt)
+
+    if name == "19D_rotary_boxkite_monad" and hasattr(mod, "RotaryBoxKite19D"):
+        return NineteenDMonadAdapter()
+
+    for attr_name in dir(mod):
+        obj = getattr(mod, attr_name)
+        if isinstance(obj, type) and hasattr(obj, "say") and attr_name != "BoxKiteMonad":
+            try:
+                return obj()
+            except TypeError:
+                continue
+
+    if hasattr(mod, "MindEyeBoxKiteKernel"):
+        return KernelMonadAdapter(mod.MindEyeBoxKiteKernel(), f"{name} (structural probe)")
+
+    raise ImportError(f"{name!r} has no recognised chat interface (no say(), "
+                      f"no known structural adapter)")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Harness link — the frame seam to a resident C monad (`ptol -w`)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -809,9 +979,15 @@ class ActiveHarness:
         try:
             from VAPMIP.harness import Harness                    # noqa: PLC0415
             self._h = Harness()
-            if monad._engine is not None:
+            # ._engine is MonadLink-specific -- BoxKiteMonad, KernelMonadAdapter,
+            # and any future monad type don't have one. getattr, not a direct
+            # attribute access, so ActiveHarness's status stops silently
+            # pinning at "stub" for every monad type except MonadLink itself
+            # (found live, 2026-09-26, diagnosing a real console screenshot).
+            engine = getattr(monad, "_engine", None)
+            if engine is not None:
                 try:
-                    self._h.attach_monad(monad._engine)
+                    self._h.attach_monad(engine)
                 except Exception:                                 # noqa: BLE001
                     pass
             self.kind = "VAPMIP.Harness" + (
@@ -930,13 +1106,29 @@ class StitchBoard:
             return self.gate.reject(_int(parts[1]),
                                     parts[2] if len(parts) > 2 else "")
         if m.startswith("/monad"):
-            arg = m[6:].strip().lower()
-            if arg in ("off", "detach", "0"):
+            arg = m[6:].strip()
+            argl = arg.lower()
+            if argl in ("off", "detach", "0"):
                 self.monad.enabled = False
                 return "(monad detached — harness + stitchboard stay live)"
-            if arg in ("on", "attach", "1"):
+            if argl in ("on", "attach", "1"):
                 self.monad.enabled = True
                 return "(monad attached)"
+            if argl == "list":
+                names = discover_monads()
+                cur = getattr(self.monad, "kind", self.monad.status())
+                return ("available monads (procedural, from VAPMIP/*monad*.py):\n"
+                        + "\n".join(f"  {n}" for n in names)
+                        + f"\ncurrent: {cur}\nswitch: /monad use <name>")
+            if argl.startswith("use "):
+                name = arg[4:].strip()
+                if name not in discover_monads():
+                    return f"(no such monad {name!r} — see /monad list)"
+                try:
+                    self.monad = load_monad_by_name(name, self.monad)
+                except Exception as e:                            # noqa: BLE001
+                    return f"(monad switch failed: {type(e).__name__}: {e})"
+                return f"(monad switched to {name} — chat cleared)"
             return f"(monad {'attached' if self.monad.enabled else 'detached'})"
         # Archimedes the Professor: established maths/physics, no framework maths.
         # He answers as a chat bot; Ptolemy relays; no support-harness post.
@@ -1183,7 +1375,7 @@ class ChatPane(Pane):
     takes_input = True
 
     _CMDS = ["› sentence mode", "› paragraph mode", "/faces", "/diag",
-             "/radio", "/proposals", "/monad"]
+             "/radio", "/proposals", "/monad", "/monad list", "/monad use"]
 
     @property
     def input_hint(self) -> str:
@@ -1461,6 +1653,10 @@ class PtolemyConsole:
 
     def _route(self, msg: str) -> None:
         reply = self.board.route(msg)
+        if reply and reply.startswith("(monad switched to "):
+            # Mandatory on switch (Cody, 2026-09-26): a new monad is a new
+            # voice — the transcript from the old one doesn't stay mixed in.
+            self.lines.clear()
         self._flush_support()
         if reply:
             self._push(f"  {reply}")
@@ -1891,9 +2087,16 @@ def main() -> int:
             link.send({"t": "attach", "who": "ptolemy_console"})
         except Exception:                                        # noqa: BLE001
             board.harness = None       # link failed -> in-process MonadLink stays
-    # the speaking construction: rotary_rerun_boxkite first, everything else the
-    # fallback chain (harness C console_speak / VAPMIP.Engine / stand-in)
-    board.monad = BoxKiteMonad(board.monad)
+    # the speaking construction: the current monad (scaled_mind_eye_boxkite_
+    # kernel_monad, the one after the 19D_* line -- Cody, 2026-09-26), not
+    # rotary_rerun_boxkite_monad, which is both stale and, under a bare
+    # python3 (no venv), crashes outright on import (nltk -> sklearn ABI
+    # mismatch, already-known issue). Falls back to the existing chain
+    # (harness C console_speak / VAPMIP.Engine / stand-in) on any failure.
+    try:
+        board.monad = load_monad_by_name("scaled_mind_eye_boxkite_kernel_monad", board.monad)
+    except Exception:                                            # noqa: BLE001
+        board.monad = BoxKiteMonad(board.monad)
     board.active = ActiveHarness(board.monad)
     # the Archimedes browsing Tab is a PtolemyDesktop-only affordance; a
     # PtolemyDesktop importer constructs PtolemyConsole(..., embedded=True),
