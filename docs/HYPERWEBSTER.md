@@ -82,7 +82,13 @@ is a much smaller integer than if the charset is randomly ordered. Common words
 live near the origin of the address space. The expected address magnitude over
 a natural language corpus is minimized.
 
-This is Huffman coding applied to address magnitude rather than bit length.
+This is Huffman-style ordering applied to address magnitude rather than bit length.
+
+**Measured 2026-09-29** (`ContextPlease/claude/scratchpad/2026-09-29_hyperwebster_overhead`):
+the effect is small. In bijective base-N the address magnitude is set by string
+length (N^length); ordering only moves the leading digits, so the saving is bounded
+by about log₂N bits (~2 decimal digits at N = 97). On 263 eight-letter English words
+the mean address went from 16.00 to 15.35 decimal digits.
 
 **What this eliminated:** large integer addresses for common words.
 **What remained:** a biased distribution where frequent words have compact addresses.
@@ -115,9 +121,9 @@ The HyperWebster does not assign addresses. It reveals them.
 ## Layer 6 — Octonion Splitting
 **Reduction type: geometric — the coordinate system**
 
-The Horner integer for an average 8-character English word is approximately 40
-decimal digits — a number with ~130 bits. Storing raw integers of this size
-is practical. But it does not give you geometry.
+At N = 97, an 8-character word has a 16-digit (~53-bit) Horner integer; ~40 decimal
+digits (~130 bits) is a ~20-character string (measured 2026-09-29). Storing raw
+integers of this size is practical. But it does not give you geometry.
 
 The Cayley-Dickson construction produces number systems by recursive doubling:
 
@@ -133,9 +139,12 @@ Each doubling sacrifices one algebraic property:
 The Horner integer is split into 8 equal-width limbs. These become the
 components of an octonion: (l₀e₀, l₁e₁, l₂e₂, l₃e₃, l₄e₄, l₅e₅, l₆e₆, l₇e₇).
 
-The octonion carries a natural distance metric. Two words with nearby octonion
-addresses are semantically related — not because someone organized them that way,
-but because the geometry of how strings are built makes it so.
+The 8 × 32-bit limb split of a 256-bit address is exactly invertible (measured
+2026-09-29, text round-trip exact), but it re-coordinatises the same integer and does
+not shorten it. A 256-bit address holds at most 38 characters at N = 97.
+
+The octonion carries a natural distance metric. The claim that two words with nearby
+octonion addresses are semantically related is **not measured here**.
 
 Non-associativity at the octonion level is not a flaw. It means the path through
 the address space matters. Order-of-operations defines the geometry. This is
@@ -180,9 +189,12 @@ The key is private. The file-type permutation is public — it is shared optimiz
 not security. The CharacterNeuron (Ptolemy neural layer 1) learns this distribution
 from examples rather than using a static table.
 
-Benchmark: for English text, frequency-sorted charset reduces expected address
-integer by ~5-6 decimal digits at length 8. Binary files near maximum entropy
-show minimal benefit — expected, correct.
+Benchmark (measured 2026-09-29, 263 eight-letter English words, N = 97): frequency
+sorting saves 0.65 decimal digits (16.00 → 15.35). Restricting the charset to the 23
+letters actually used saves ~5 digits (16.00 → 10.85) — that saving comes from the
+smaller alphabet, not from the ordering. The earlier "~5-6 digits from frequency
+sorting" figure was unmeasured. Binary files near maximum entropy are expected to show
+minimal benefit (not measured).
 
 **What this produced:** file-type-aware compact addresses.
 **What remained:** a system that adapts its geometry to the material it indexes.
