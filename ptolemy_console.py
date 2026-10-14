@@ -711,6 +711,53 @@ class GenerateMonadAdapter:
         return self.kind
 
 
+class EntryPointMonadAdapter:
+    """Adapter for monads that speak through an entry point other than
+    say()/generate() (found by the 2026-10-14 all-monads benchmark, VAPMIP
+    Tuning-the-Engine Phase 42: six speaking monads were listed by
+    discover_monads() but could not be switched to). Entry points, tried in
+    this order on a class defined in the monad's own module:
+
+        process_input(text) -> response with .text   ptolemy_monad.PtolemyMonad
+        weave(text)         -> Document.render()      boxkite_orbweaver_monad.OrbWeaverMonad
+        speak(prompt)       -> str                    VQ_rotary_monad.ValaQuenta,
+                                                      rotary_monad / ZD_rotary_monad AhuraMazda
+        basin(seeds)        -> idea pool              monad_english_io.MonadEnglish (built by read())
+
+    Each entry point's own return value is reported as-is (the 'basin' pool
+    is labelled as a pool, not a sentence). Nothing that learns or writes is
+    called: no hear(), no ingest(), no checkpoint()."""
+
+    ORDER = ("process_input", "weave", "speak", "basin")
+
+    def __init__(self, obj: Any, entry: str, kind: str) -> None:
+        self._obj = obj
+        self._entry = entry
+        self.kind = kind
+        self.enabled = True
+
+    def say(self, text: str) -> Tuple[str, Dict[str, Any]]:
+        if not self.enabled:
+            return ("(monad detached — harness only)", {"via": "detached"})
+        try:
+            if self._entry == "process_input":
+                r = self._obj.process_input(text)
+                reply = getattr(r, "text", None) or getattr(r, "response", None) or str(r)
+            elif self._entry == "weave":
+                reply = self._obj.weave(text).render()
+            elif self._entry == "speak":
+                reply = str(self._obj.speak(text))
+            else:
+                toks = [w for w in text.lower().replace("?", "").split() if len(w) > 2]
+                reply = "idea pool: " + ", ".join(self._obj.basin(toks, k=12))
+            return str(reply), {"via": self._entry}
+        except Exception as e:                                    # noqa: BLE001
+            return (f"(monad error: {type(e).__name__}: {e})", {"via": "error"})
+
+    def status(self) -> str:
+        return self.kind
+
+
 def load_monad_by_name(name: str, nxt: Any) -> Any:
     """Import one discovered monad module and wrap it honestly. Tries, in
     order: RotaryBoxKiteMonad (the existing BoxKiteMonad path),
@@ -753,6 +800,23 @@ def load_monad_by_name(name: str, nxt: Any) -> Any:
                 return GenerateMonadAdapter(obj(), f"{name}.{attr_name} (generate)")
             except TypeError:
                 continue
+
+    # speaking entry points other than say()/generate() (Phase 42, 2026-10-14)
+    for attr_name in dir(mod):
+        obj = getattr(mod, attr_name)
+        if isinstance(obj, type) and getattr(obj, "__module__", None) == name:
+            for entry in EntryPointMonadAdapter.ORDER[:3]:
+                if callable(getattr(obj, entry, None)):
+                    try:
+                        return EntryPointMonadAdapter(obj(), entry, f"{name}.{attr_name}.{entry}")
+                    except TypeError:
+                        break
+    if callable(getattr(mod, "read", None)):
+        for attr_name in dir(mod):
+            obj = getattr(mod, attr_name)
+            if (isinstance(obj, type) and getattr(obj, "__module__", None) == name
+                    and callable(getattr(obj, "basin", None))):
+                return EntryPointMonadAdapter(mod.read(), "basin", f"{name}.{attr_name}.basin")
 
     if hasattr(mod, "MindEyeBoxKiteKernel"):
         return KernelMonadAdapter(mod.MindEyeBoxKiteKernel(), f"{name} (structural probe)")
