@@ -6,9 +6,10 @@ Midline.py — the 'M'-anchored (Modifier, Step) cipher, as a Kryptos/Pycrypt
 tool.
 
 Every other cipher in this package works letters-only, 26-symbol, historical
-by-hand mechanics (`common.py`). This one covers 36 symbols (A-Z case-folded
-plus 0-9) and is not a historical cipher at all -- it is Cody's own pre-
-HyperWebster address scheme (predates `add_scale_sign`, reconstructed
+by-hand mechanics (`common.py`). This one covers the 95 printable ASCII
+symbols (A-Z, a-z, 0-9, 32 punctuation, space) plus line feed (case exact; tab
+becomes four spaces, anything else dropped) and is not a historical cipher at
+all -- it is Cody's own pre-HyperWebster address scheme (predates `add_scale_sign`, reconstructed
 2026-09-26), included here because it IS a cipher in the plain sense: a
 reversible transform of text into another representation (a single integer),
 keyed by a fixed anchor character ('M') rather than a shared secret.
@@ -26,16 +27,18 @@ _THEPLACE = Path(__file__).resolve().parents[3]
 if str(_THEPLACE) not in sys.path:
     sys.path.insert(0, str(_THEPLACE))
 from PtolemyDesktop.Archimedes.Maths.MidlineIndex import (  # noqa: E402
-    encode_text, decode_text, M_POS, K,
+    encode_text, decode_text, normalise, M_POS, K,
 )
 
 
 def encrypt(text: str) -> CipherResult:
-    """Text (A-Z/0-9 only, case-folded) -> a single reconstructable integer
-    address, returned as a decimal string plus the length needed to decode."""
-    cleaned = ''.join(ch for ch in text if ch.isalnum())
+    """Text (the 95 printable ASCII characters plus line feed, case exact; tab
+    becomes four spaces, anything else outside the domain is dropped) -> a single reconstructable
+    integer address, returned as a decimal string plus the length needed to
+    decode."""
+    cleaned = ''.join(ch for ch in normalise(text) if 0x20 <= ord(ch) <= 0x7E or ch == '\n')
     if not cleaned:
-        return CipherResult('', note='no A-Z/0-9 characters found')
+        return CipherResult('', note='no supported characters found')
     address = encode_text(cleaned)
     return CipherResult(
         text=str(address),
@@ -53,9 +56,9 @@ def decrypt(address_str: str, length: int) -> CipherResult:
 
 
 if __name__ == '__main__':
-    enc = encrypt('The Two Trees 2026')
+    enc = encrypt('The Two Trees 2026, -3!\tEnd\nLine two')
     dec = decrypt(enc.text, enc.key)
-    assert dec.text == 'THETWOTREES2026', dec.text
+    assert dec.text == 'The Two Trees 2026, -3!    End\nLine two', dec.text
     print('Midline cipher self-test: HOLDS')
-    print(f"  'The Two Trees 2026' -> {enc.text}  ({enc.note})")
+    print(f"  'The Two Trees 2026, -3!<TAB>End' -> {enc.text}  ({enc.note})")
     print(f"  -> decoded: {dec.text}")

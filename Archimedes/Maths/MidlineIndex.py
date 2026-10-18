@@ -27,19 +27,36 @@ the farther alphabet edge (Z, position 25) is exactly 13 away. That bound is
 what makes the per-character cost cheap and fixed, not the digit-count
 (a mistake corrected live this session -- see OVERHEAD ACCOUNTING below).
 
-DOMAIN: 36 symbols -- A-Z (case-folded) and 0-9. Deliberately narrower than
-HyperWebster's eventual 97-char keyboard set; this predates that generality.
+REVISED 2026-10-12 (Cody): the original design had THREE letter/digit types
+(Uppercase, Lowercase, Digit) -- the first slot had been collapsed to
+letter-or-digit by mistake -- and punctuation did not exist yet. Both are
+now in, and the sign slot is dropped for digits (a '-' before a digit is
+simply two characters: one punctuation, one digit; no sign rule, no
+"if and only if" special case).
 
-PER-CHARACTER CODE (packed for the whole-text Horner address):
-    code = type*28 + sign*14 + step        (K = 56 = 2*2*14)
-    type: 0=letter, 1=number
-    sign: 0=toward-A (negative), 1=toward-M-or-Z (positive); fixed 0 for numbers
-    step: 0..13 for letters (|pos-M_POS|); for numbers, the digit value itself (0..9)
+DOMAIN: 96 characters -- the 95 printable ASCII characters (0x20..0x7E): A-Z,
+a-z, 0-9, the 32 punctuation/symbols and SPACE, plus LINE FEED (a single
+character behind the scenes). Space and line feed lead the punctuation group.
+Case is EXACT (no folding). TAB is not in the domain: four spaces substitute
+for it (see `normalise`).
 
-WHOLE-TEXT ADDRESS (the Horner collapse):
-    address = sum( code_i * K^(n-1-i) for i, code_i in enumerate(codes) )
-    -- exactly HyperWebster's own Horner shape (base-97 -> here, base-56),
-    reconstructable given `address` and the text length `n`.
+PER-CHARACTER CODE: a 4-digit DECIMAL number  T S DD  =  type*1000 + sign*100 + step
+    T type : 0=Uppercase, 1=Lowercase, 2=Digit, 3=Punctuation
+    S sign : letters   0=toward A/a (or the anchor itself), 1=toward Z/z
+             digits    always 0
+             punct     0=first half, 1=second half (ASCII order, even split)
+    DD step: letters   |pos - M_POS|, 00..13 (anchor M / m); step 00 -> sign 0
+             digits    the digit value, 00..09
+             punct     index within its half, 00..16 (two halves of 17:
+                       half 0 = LF, space, ! " # $ % & ' ( ) * + , - . /
+                       half 1 = : ; < = > ? @ [ \\ ] ^ _ ` { | } ~ )
+Exactly 96 combinations are valid (VALID_CODES, sorted); everything else is
+rejected by decode_char. 26 + 26 + 10 + 34 = 96.
+
+WHOLE-TEXT ADDRESS (the Horner collapse), over the INDEX into VALID_CODES:
+    address = sum( index_i * K^(n-1-i) )        K = 96 = len(VALID_CODES)
+    -- HyperWebster's own Horner shape (base-97 -> here, base-96),
+    reconstructable given `address` and the text length `n` (in characters).
 
 OVERHEAD ACCOUNTING (corrected live, 2026-09-26 -- the record, not smoothed
 over): first pass wrongly treated the step slot as needing the full base-100
@@ -53,6 +70,11 @@ So this scheme is CHEAPER per character than base-97 Horner (6 vs 6.6 bits),
 within 1.16x of its own domain's true minimum -- a genuine overhead
 reduction, not a wash, PROVIDED the hard bound is respected in how the
 step slot is packed (K=56 here, not K=200).
+
+(2026-10-12: the above was the 36-symbol, K=56 design. Under the 96-symbol
+design the cost is log2(96) = 6.585 bits/char -- the minimum for 96 equally
+likely symbols, and below base-97's 6.600 only because tab is out of the
+domain. Storing the 4 decimal digits as written would be 13.29 bits/char.)
 """
 from __future__ import annotations
 
@@ -68,41 +90,64 @@ from ValaQuenta.modules.add_scale_sign.maths import ASS  # noqa: E402
 from ValaQuenta.modules.hyperwebster.maths import US_KEYBOARD_CHARS  # noqa: E402
 
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+LOWER = ALPHABET.lower()
+DIGITS = "0123456789"
+PUNCT = "\n " + "".join(chr(c) for c in range(0x21, 0x7F) if not chr(c).isalnum())   # LF, space + 32, ASCII order
+PUNCT_HALF = len(PUNCT) // 2         # 17 -- the sign picks the half (17 + 17)
 M_POS = ALPHABET.index("M")          # 12
-STEP_BASE = 14                       # 0..13, the hard ceiling -- never above 13
-K = 2 * 2 * STEP_BASE                # = 56, the per-character packing base
+STEP_BASE = 14                       # letter steps 0..13, the hard ceiling -- never above 13
+T_UPPER, T_LOWER, T_DIGIT, T_PUNCT = 0, 1, 2, 3
 
 
-# ── one character <-> one ASS element ───────────────────────────────────────
+# ── one character <-> one 4-digit decimal code (T S DD) ─────────────────────
 
 def encode_char(ch: str) -> int:
-    """One character -> its packed 0..55 code. type*28 + sign*14 + step."""
-    if ch.isdigit():
-        return 1 * 28 + 0 * STEP_BASE + int(ch)
-    pos = ALPHABET.index(ch.upper())
-    step = abs(pos - M_POS)
-    sign = 0 if pos < M_POS else 1
-    return 0 * 28 + sign * STEP_BASE + step
+    """One character -> its 4-digit decimal code  type*1000 + sign*100 + step.
+    Raises ValueError for anything outside the 96 supported characters."""
+    if ch in ALPHABET or ch in LOWER:
+        type_, pos = (T_UPPER, ALPHABET.index(ch)) if ch in ALPHABET else (T_LOWER, LOWER.index(ch))
+        step = abs(pos - M_POS)
+        sign = 1 if pos > M_POS else 0            # step 0 (the anchor) is canonically sign 0
+        return type_ * 1000 + sign * 100 + step
+    if ch in DIGITS:
+        return T_DIGIT * 1000 + int(ch)           # sign always 0 for digits
+    if ch in PUNCT:
+        i = PUNCT.index(ch)
+        return T_PUNCT * 1000 + (i // PUNCT_HALF) * 100 + i % PUNCT_HALF
+    raise ValueError(f"MidlineIndex covers the 96 supported characters (95 printable ASCII + line feed); got {ch!r}")
 
 
 def decode_char(code: int) -> str:
-    """Packed 0..55 code -> the original character (uppercase for letters)."""
-    type_, rem = divmod(code, 28)
-    sign, step = divmod(rem, STEP_BASE)
-    if type_ == 1:
-        return str(step)
-    if step == 0:
-        return "M"
-    pos = M_POS - step if sign == 0 else M_POS + step
-    return ALPHABET[pos]
+    """4-digit decimal code -> the exact original character. Raises ValueError
+    for any code that is not one of the 96 valid ones."""
+    type_, sign, step = code // 1000, code // 100 % 10, code % 100
+    if type_ in (T_UPPER, T_LOWER) and ((sign == 0 and step <= M_POS) or (sign == 1 and 1 <= step <= 13)):
+        alpha = ALPHABET if type_ == T_UPPER else LOWER
+        return alpha[M_POS - step if sign == 0 else M_POS + step]
+    if type_ == T_DIGIT and sign == 0 and step <= 9:
+        return DIGITS[step]
+    if type_ == T_PUNCT and sign in (0, 1) and step < PUNCT_HALF:
+        return PUNCT[sign * PUNCT_HALF + step]
+    raise ValueError(f"not a valid Midline code: {code:04d}")
+
+
+# The 96 valid codes in ascending numeric order; the list INDEX (0..95) is what
+# the whole-text Horner address is built from. Small enough to hardcode.
+VALID_CODES: Tuple[int, ...] = tuple(sorted(
+    encode_char(ch) for ch in ALPHABET + LOWER + DIGITS + PUNCT))
+CODE_INDEX: Dict[int, int] = {c: i for i, c in enumerate(VALID_CODES)}
+ALPHABET_SIZE = len(VALID_CODES)     # 96, exactly -- the true de Bruijn k
+K = ALPHABET_SIZE                    # = 96, the whole-text Horner base
 
 
 def char_ass(ch: str) -> Tuple[str, ASS]:
     """The ASS element actually reconstructing this character's alphabet
     position, plus a label -- for display/proof, not used by encode/decode
     (which work on the packed integer code directly, per __main__ below)."""
-    if ch.isdigit():
+    if ch in DIGITS:
         return ("digit", ASS.ADD(float(int(ch))))
+    if ch in PUNCT:
+        return ("punctuation index in half", ASS.ADD(float(PUNCT.index(ch) % PUNCT_HALF)))
     pos = ALPHABET.index(ch.upper())
     step = abs(pos - M_POS)
     sign = 1 if pos >= M_POS else -1
@@ -115,50 +160,51 @@ def char_ass(ch: str) -> Tuple[str, ASS]:
 # ── whole-text Horner collapse ───────────────────────────────────────────────
 
 def encode_text(text: str) -> int:
-    """Text (letters + digits only; case-folded, other characters rejected)
-    -> ONE reconstructable Horner-style integer address, base K=56."""
+    """Text (the 95 printable ASCII characters plus line feed, case exact;
+    anything else, tab included, is rejected -- run `normalise` first to turn
+    tabs into four spaces) -> ONE reconstructable Horner-style integer
+    address, base K=96, over each character's index in VALID_CODES."""
     address = 0
     for ch in text:
-        if not (ch.isalpha() or ch.isdigit()):
-            raise ValueError(f"MidlineIndex only covers A-Z/0-9; got {ch!r}")
-        address = address * K + encode_char(ch)
+        address = address * K + CODE_INDEX[encode_char(ch)]
     return address
 
 
 def decode_text(address: int, length: int) -> str:
-    """Address + original length -> the exact original text (case-folded)."""
+    """Address + original length -> the exact original text."""
     chars: List[str] = []
     remaining = address
     for _ in range(length):
-        chars.append(decode_char(remaining % K))
+        chars.append(decode_char(VALID_CODES[remaining % K]))
         remaining //= K
     chars.reverse()
     return "".join(chars)
 
 
 def verify(text: str) -> bool:
-    """Round-trip check: encode then decode returns the case-folded original."""
+    """Round-trip check: encode then decode returns the exact original."""
     addr = encode_text(text)
-    return decode_text(addr, len(text)) == text.upper()
+    return decode_text(addr, len(text)) == text
 
 
-# ── de Bruijn sequence over the TRUE 36-symbol Midline alphabet ─────────────
+def normalise(text: str) -> str:
+    """Tab is not a code: four spaces substitute for it. Everything else is
+    left as is (encode_text still rejects carriage return and non-ASCII)."""
+    return text.replace("\t", "    ")
+
+
+# ── de Bruijn sequence over the TRUE 96-symbol Midline alphabet ─────────────
 # permutation size limiting: every possible length-n window appears exactly
 # ONCE, cyclically, in a sequence of length A^n (not n*A^n, the naive
 # flat-enumeration cost). FKM (Fredricksen-Kessler-Maiorana) construction,
 # O(A^n) -- linear in the output, not a search.
 #
-# NOT run over K=56 -- K is the packing base (2*2*14), not the alphabet
-# size. 20 of those 56 codes are structurally unused (digit codes with
-# step>=9, since digits only use 0..9; the M/M redundancy at step=0) and
-# decode_char is only well-defined on the 36 codes encode_char actually
-# produces. Found live: decode_char(step=10..13, type=1) returns "10".."13"
-# -- TWO characters, silently breaking the one-code-one-character
-# invariant. The de Bruijn alphabet must be the 36 VALID codes, not the
-# raw 0..K-1 packing range.
-
-VALID_CODES: Tuple[int, ...] = tuple(encode_char(ch) for ch in ALPHABET + "0123456789")
-ALPHABET_SIZE = len(VALID_CODES)   # 36, exactly -- the true de Bruijn k
+# Run over the 96 VALID codes (VALID_CODES / ALPHABET_SIZE, defined above
+# with the per-character code), not over a raw packing range. (History: the
+# earlier K=56 packing had 20 structurally unused codes, and decode_char on
+# an unused digit code returned "10".."13" -- TWO characters, silently
+# breaking the one-code-one-character invariant. decode_char now raises
+# ValueError on every code outside the 96.)
 
 
 def de_bruijn_codes(n: int, k: int = K) -> List[int]:
@@ -183,17 +229,17 @@ def de_bruijn_codes(n: int, k: int = K) -> List[int]:
 
 
 def de_bruijn_text(n: int) -> str:
-    """The de Bruijn sequence over the TRUE 36-symbol alphabet, decoded to
-    one literal string over A-Z/0-9. Every length-n substring of A-Z/0-9,
-    read cyclically, appears exactly once."""
-    abstract = de_bruijn_codes(n, k=ALPHABET_SIZE)   # symbols 0..35
+    """The de Bruijn sequence over the TRUE 96-symbol alphabet, decoded to
+    one literal string over the 96 supported characters. Every length-n
+    substring, read cyclically, appears exactly once."""
+    abstract = de_bruijn_codes(n, k=ALPHABET_SIZE)   # symbols 0..95 (96 of them)
     return "".join(decode_char(VALID_CODES[i]) for i in abstract)
 
 
 def verify_de_bruijn(n: int, k: int = K) -> dict:
     """Checks the EXACT property, not just coverage: every length-n window
     (cyclic) appears ONCE -- no duplicates, no omissions. n restricted small
-    here (k**n grows fast; k=56 makes n=3 already ~175616 windows)."""
+    here (k**n grows fast; k=96 makes n=3 already 884736 windows)."""
     seq = de_bruijn_codes(n, k)
     length = len(seq)
     assert length == k ** n, (length, k ** n)
@@ -285,34 +331,62 @@ def reconstruct_from_pathway(steps: List[int]) -> str:
 
 def overhead_report() -> dict:
     import math
-    letter_bits = 1 + 1 + math.ceil(math.log2(STEP_BASE))
+    index_bits = math.log2(K)
     horner97_bits = math.log2(97)
-    true_min_bits = math.log2(36)
+    true_min_bits = math.log2(96)
     return {
-        "midline_bits_per_char": letter_bits,
+        "midline_bits_per_char": index_bits,                 # index into VALID_CODES, base 96
+        "four_decimal_digits_bits_per_char": math.log2(10000),
         "horner97_bits_per_char": horner97_bits,
-        "true_minimum_bits_36symbols": true_min_bits,
-        "midline_cheaper_than_horner97": letter_bits < horner97_bits,
-        "midline_overhead_vs_true_min": letter_bits / true_min_bits,
+        "true_minimum_bits_96symbols": true_min_bits,
+        "midline_cheaper_than_horner97": index_bits < horner97_bits,
+        "midline_overhead_vs_true_min": index_bits / true_min_bits,
     }
 
 
 if __name__ == "__main__":
     # boundary values, exactly as specified
-    # M itself: step=0, and the `pos >= M_POS` convention gives it sign=1 --
-    # harmless, since decode_char ignores sign whenever step==0.
-    assert encode_char("M") == 0 * 28 + 1 * STEP_BASE + 0
-    assert decode_char(encode_char("M")) == "M"
+    # M itself: step=0 is canonically sign 0 (one code per character).
+    assert encode_char("M") == 0 and encode_char("m") == 1000
+    assert encode_char("A") == 12 and encode_char("Z") == 113
+    assert encode_char("a") == 1012 and encode_char("z") == 1113
+    assert encode_char("0") == 2000 and encode_char("9") == 2009   # digit sign always 0
+    assert encode_char("\n") == 3000 and encode_char(" ") == 3001 and encode_char("/") == 3016
+    assert encode_char(":") == 3100 and encode_char("~") == 3116
     assert abs(ALPHABET.index("A") - M_POS) == 12
     assert abs(ALPHABET.index("Z") - M_POS) == 13
 
-    # full alphabet + digit round trip
-    for ch in ALPHABET + "0123456789":
+    # exactly 96 valid codes, one per supported character, none else decode
+    assert ALPHABET_SIZE == 96 == len(set(VALID_CODES))
+    assert sorted(decode_char(c) for c in VALID_CODES) == ["\n"] + [chr(x) for x in range(0x20, 0x7F)]
+    for t in range(10):
+        for s in range(10):
+            for st in range(100):
+                code = t * 1000 + s * 100 + st
+                if code not in CODE_INDEX:
+                    try:
+                        decode_char(code)
+                    except ValueError:
+                        continue
+                    raise AssertionError(f"invalid code {code:04d} decoded")
+
+    # every character round trip, case exact
+    for ch in ALPHABET + LOWER + DIGITS + PUNCT:
         assert decode_char(encode_char(ch)) == ch, ch
 
-    # whole-text Horner collapse round trip
-    for sample in ("HELLO", "TELPERION2026", "M", "A", "Z", "OCAPTAIN"):
+    # tab, carriage return and non-ASCII are outside the domain
+    for bad in ("\t", "\r", "é"):
+        try:
+            encode_char(bad)
+            raise AssertionError(f"{bad!r} should be rejected")
+        except ValueError:
+            pass
+
+    # whole-text Horner collapse round trip (case exact now)
+    for sample in ("HELLO", "TELPERION2026", "M", "A", "Z", "OCAPTAIN",
+                   "Hello, World -3!", "-3", "~!;:", " ", "a  b", "line1\nline2\n"):
         assert verify(sample), sample
+    assert normalise("a\tb") == "a    b" and verify(normalise("a\tb"))
 
     # the exact ASS fit, demonstrated not just claimed:
     # A's alphabet position (0) = ASS(add=M_POS, scale=12, sign=-1)(1)
@@ -329,9 +403,8 @@ if __name__ == "__main__":
     print(f"  Z -> {label_z} -> position {ass_z(1.0):.0f} (ALPHABET.index('Z')={ALPHABET.index('Z')})")
     print(f"  overhead report: {rep}")
 
-    # de Bruijn: every window EXACTLY once, over the TRUE 36-symbol alphabet
-    # (not K=56 -- checked live, K includes 20 structurally-unused codes)
-    assert ALPHABET_SIZE == 36, ALPHABET_SIZE
+    # de Bruijn: every window EXACTLY once, over the TRUE 96-symbol alphabet
+    assert ALPHABET_SIZE == 96, ALPHABET_SIZE
     for n in (1, 2, 3):
         result = verify_de_bruijn(n, k=ALPHABET_SIZE)
         assert result["ok"], result
