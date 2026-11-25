@@ -100,4 +100,65 @@ int mh_send_raw(mh_harness *h, const char *json_line);
  * folded into any core state). Same 1/0/-1 return contract as mh_recv. */
 int mh_pump(mh_harness *h, void *monad, mh_frame *out, int timeout_ms);
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 2026-11-25: THE HARNESS HEARS.  The C port of the Python harness path tested the same day
+ * (numeric.py, state_repass.py, bw_drift.py, conversation_usage.py, prompt_to_state.py's usage meter).
+ * Ptolemy is the Monad + Harness together: ptol.c is the Monad (the voice), this is the Harness (the ears).
+ * Python is the test bench; every number here is checked against it (tests/test_c_parity.py).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── numbers are not words (numeric.py) ─────────────────────────────────────── */
+typedef struct {
+    char   text[48];
+    char   kind[12];      /* integer decimal percent ordinal currency signed code */
+    double value;
+    int    has_value;     /* 0 for codes (x2, h264, 3.10.3) */
+} mh_number;
+
+/* Copy `text` to `out` with every numeral/code/version replaced by one space; fill `nums` (up to maxn). Returns how many were found. */
+int mh_split_numbers(const char *text, char *out, size_t outsz, mh_number *nums, int maxn);
+
+/* ── the ears ───────────────────────────────────────────────────────────────── */
+enum { MH_EXTERNAL = 0, MH_INTERNAL = 1, MH_DOCUMENT = 2 };
+typedef int    (*mh_known_fn)(const char *word, void *ctx);   /* does the Monad know this word (has a WordNet entry)? */
+typedef double (*mh_pgen_fn)(const char *word, void *ctx);   /* general-English probability of the word (the prior the user's usage mixes into) */
+
+typedef struct mh_ear mh_ear;
+mh_ear *mh_ear_open(const char *state_dir, const char *ptol_dir, mh_known_fn known, mh_pgen_fn pgen, void *ctx);
+void    mh_ear_close(mh_ear *e);                 /* saves the usage store and the number counts */
+
+/* Hear one turn (numbers leave first; MH_EXTERNAL = the user, counted and priced; MH_INTERNAL = the monad's own reply, priced, completes the pair and moves
+ * the Broca-Wernicke drift; MH_DOCUMENT = nothing counted).  Returns the number of numbers found. */
+int     mh_ear_hear(mh_ear *e, const char *text, int cls, const char *pair);
+
+double  mh_ear_lambda(const mh_ear *e);          /* usage confidence N/(N+200) */
+double  mh_ear_p_word(const mh_ear *e, const char *w);   /* lambda*(user usage) + (1-lambda)*general */
+double  mh_ear_bits_per_word(const mh_ear *e, const char *prose);
+double  mh_ear_bw_correction(const mh_ear *e);   /* in [-1, 1]: >0 favour probable words, <0 flatten */
+int     mh_ear_n_obs(const mh_ear *e);
+int     mh_ear_n_numbers(const mh_ear *e);
+void    mh_ear_report(const mh_ear *e, char *out, size_t sz);   /* straight text: the usage, drift and number channels */
+
+/* Pure functions (tested against bw_drift.py): the drift step. state = 0/1 hysteresis flag in/out. */
+double  mh_bw_correction(double w_bits, double b_bits, int *active, double *delta_out, double *gamma_abs_out);
+
+/* ── the user's state: the usage meter (a ridge on TF-IDF 1-2 grams, exported by tools/export_c_monad_data.py), the running solution, the repass ── */
+#define MH_NAX 7                                  /* OPI GLU GABA DA 5HT NE OXT: the neuro_recipes kite order */
+extern const char *const MH_AXES[MH_NAX];
+typedef struct {
+    double conc[14], spread[14];                  /* the 14 poles, dark then light per axis */
+    double mix[MH_NAX], target[MH_NAX];
+    int    held, healed, ready;
+    double k_eff;
+} mh_state;
+
+/* Read one user turn: meter -> solution (C1V1 + C2V2 = C3(V1+V2), Vmax 8) -> heal -> mix -> cancel.  `fill` = how many of the 16 window slots hold a word.
+ * ready = 0 when user_state.bin is absent (the state then stays at baseline and is held). */
+void    mh_ear_user_turn(mh_ear *e, const char *text, int fill, mh_state *out);
+/* The meter alone on one text (no solution, no state change): conc = clip(ridge)*4.5*gain, as ptol's usage-only reading. Returns 0 if no model. */
+int     mh_meter_raw(const mh_ear *e, const char *text, double dose[14]);
+void    mh_state_heard(const mh_state *s, int *axis, int *level);                 /* the axis farthest from RECEPTIVE and its level 0..6 */
+void    mh_state_trajectory(const mh_state *s, int n, int *axis, int *level);     /* meet_then_lead: n (axis, level) steps, user's mix -> target */
+
 #endif /* MONAD_HARNESS_H */
